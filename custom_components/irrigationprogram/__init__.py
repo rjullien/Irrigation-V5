@@ -292,7 +292,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 adjustment=zone.get(ATTR_WATER_ADJUST),
                 flow_rate=None,
             )
-            msg = None
+            msg = ""
             nl = "\n"
             state = hass.states.get(z.zone)
             if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
@@ -302,14 +302,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if z.adjustment:
                 state = hass.states.get(z.adjustment)
                 if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-                    if msg is not None:
-                        msg = f"{nl}"
+                    if msg:
+                        msg += nl
                     msg += f"Warning, {z.adjustment} has not initialised before irrigation program, check your configuration{nl}"
             if z.rain_sensor:
                 state = hass.states.get(z.rain_sensor)
                 if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-                    if msg is not None:
-                        msg = f"{nl}"
+                    if msg:
+                        msg += nl
                     msg += f"Warning, {z.rain_sensor} has not initialised before irrigation program, check your configuration"
             if msg:
                 async_create(
