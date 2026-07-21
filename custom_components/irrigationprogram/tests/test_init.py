@@ -110,6 +110,38 @@ async def test_async_setup_entry_basic(mock_hass, mock_config_entry):
     assert zones[0].zone == "switch.zone1"
 
 
+async def test_async_setup_entry_unavailable_zones_no_typeerror(
+    mock_hass, mock_config_entry
+):
+    """Unavailable zones must not TypeError when building the warning message.
+
+    Regression for issue #171: msg was None then msg += "ERROR..." crashed
+    irrigationprogram setup when all Tuya valves were unavailable.
+    """
+    import asyncio
+
+    unavailable = MagicMock()
+    unavailable.state = "unavailable"
+    mock_hass.states.get = MagicMock(return_value=unavailable)
+
+    with (
+        patch("custom_components.irrigationprogram.async_create") as mock_notify,
+        patch(
+            "custom_components.irrigationprogram.asyncio.wait_for",
+            side_effect=asyncio.TimeoutError,
+        ),
+    ):
+        result = await async_setup_entry(mock_hass, mock_config_entry)
+
+    assert result is True
+    assert mock_config_entry.runtime_data is not None
+    assert len(mock_config_entry.runtime_data.zone_data) == 1
+    mock_notify.assert_called()
+    message = mock_notify.call_args.kwargs["message"]
+    assert "ERROR switch.zone1" in message
+    assert "has not initialised" in message
+
+
 async def test_irrigation_program_initialization(mock_config_entry):
     """Test IrrigationProgram dataclass initialization."""
     config = {
