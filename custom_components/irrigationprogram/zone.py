@@ -98,6 +98,9 @@ class Zone(SwitchEntity, RestoreEntity):
         self._programdata = programdata
         self._zonedata = zonedata
         self._remaining_time = 0
+        self._resume_remaining_s = None
+        self._remaining_override = None
+        self._resume_segment_s = None
         self._default_run_time = 0
         self._state = CONST_OFF  # switch state
         self._status:str = CONST_OFF  # zone run status
@@ -156,8 +159,32 @@ class Zone(SwitchEntity, RestoreEntity):
             )
         await self.calc_default_run_time()
         self.async_schedule_update_ha_state()
-        # on reload/restart ensure the zone is off
-        await self.async_solenoid_turn_off()
+        # Keep solenoid open when resuming a mid-cycle watering after reboot.
+        # Default path forces off so a restart cannot leave a valve open with
+        # no software owner — but that also kills an active cycle.
+        from .const import ATTR_RUNTIME_CHECKPOINT, DOMAIN
+        from .runtime_checkpoint import zone_should_skip_startup_off
+
+        entry_data = self.hass.data.get(DOMAIN, {}).get(
+            self._programdata.unique_id, {}
+        )
+        checkpoint = entry_data.get(ATTR_RUNTIME_CHECKPOINT)
+        if zone_should_skip_startup_off(checkpoint, self.solenoid):
+            _LOGGER.info(
+                "Zone %s: skipping startup solenoid off (resume mid-cycle)",
+                self._name,
+            )
+            self._resume_remaining_s = None
+            # Stash remaining for program resume path
+            from .runtime_checkpoint import apply_downtime
+
+            adjusted = apply_downtime(checkpoint) or {}
+            for item in adjusted.get("running") or []:
+                if item.get("solenoid") == self.solenoid:
+                    self._resume_remaining_s = int(item.get("remaining_s", 0))
+                    break
+        else:
+            await self.async_solenoid_turn_off()
 
     @property
     def is_on(self) -> bool:
@@ -1292,8 +1319,14 @@ class Zone(SwitchEntity, RestoreEntity):
             self._zone_manual_start = True
             await self._programdata.switch.entity_toggle_zone(self._zonedata)
 
-    async def async_turn_on_from_program(self, last=False, last_ran=None):
-        """Start the zone watering cycle."""
+    async def async_turn_on_from_program(
+        self, last=False, last_ran=None, remaining_override=None
+    ):
+        """Start the zone watering cycle.
+
+        remaining_override: when resuming after reboot, water only this many
+        seconds instead of the full configured runtime.
+        """
         # last indicates this is the last zone to be run
         # last_ran is the start time of the program
         # NOTE: the default was previously evaluated once at import time,
@@ -1305,6 +1338,7 @@ class Zone(SwitchEntity, RestoreEntity):
         self.async_schedule_update_ha_state()
         self._stop = False
         self._aborted = False
+        self._remaining_override = remaining_override
 
         if self.ignore_sensors:
             water_adjust_value = 1
@@ -1316,7 +1350,9 @@ class Zone(SwitchEntity, RestoreEntity):
             seconds_run:int = 0
             volume_delivered = 0
             # run time adjusted to 0 skip this zone
-            if self.remaining_time_value <= 0:
+            if self.remaining_time_value <= 0 and remaining_override is None:
+                continue
+            if remaining_override is not None and remaining_override <= 0:
                 continue
             self._status_sensor = self._status = CONST_ON
             await self.status_sensor_set()
@@ -1334,6 +1370,10 @@ class Zone(SwitchEntity, RestoreEntity):
                 )
 
             if self._stop:
+                break
+
+            # After a resume override, only run one water segment
+            if remaining_override is not None:
                 break
 
             # wait cycle
@@ -1405,7 +1445,16 @@ class Zone(SwitchEntity, RestoreEntity):
 
         await self.async_solenoid_turn_on()
 
-        watertime = math.ceil(self.water * water_adjust_value)
+        if self._remaining_override is not None:
+            watertime = math.ceil(self._remaining_override)
+            # Consume override so a later eco segment cannot reuse it
+            self._remaining_override = None
+            self._resume_segment_s = watertime
+            self._remaining_time = watertime
+            await self.remaining_time_set()
+        else:
+            watertime = math.ceil(self.water * water_adjust_value)
+            self._resume_segment_s = None
         start_time = dt_util.now()
         end_time = dt_util.now() + timedelta(seconds=watertime)
         if last and self._pump:
@@ -1442,12 +1491,17 @@ class Zone(SwitchEntity, RestoreEntity):
                 if self._status == CONST_PAUSED:
                     break
                 seconds_run = int((dt_util.now() - start_time).total_seconds())
-                self._remaining_time = await self.calc_run_time(
-                    seconds_run,
-                    volume_delivered=0,
-                    repeats_remaining=reps,
-                    scheduled=self.scheduled,
-                )
+                if self._resume_segment_s is not None:
+                    self._remaining_time = max(
+                        0, int(self._resume_segment_s) - seconds_run
+                    )
+                else:
+                    self._remaining_time = await self.calc_run_time(
+                        seconds_run,
+                        volume_delivered=0,
+                        repeats_remaining=reps,
+                        scheduled=self.scheduled,
+                    )
                 await self.remaining_time_set()
                 if self._aborted:
                     break

@@ -32,6 +32,7 @@ from homeassistant.helpers import config_validation as cv
 
 from . import utils
 from .const import (
+    ATTR_RUNTIME_CHECKPOINT,
     ATTR_CARD_YAML,
     ATTR_LOW_POWER,
     ATTR_CONTINUE_ON_UNEXPECTED_STATE,
@@ -322,8 +323,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         entry.runtime_data = IrrigationData(program, zone_data)
 
+        # Load mid-cycle checkpoint BEFORE platforms so Zone.async_added_to_hass
+        # can skip solenoid_turn_off for valves that should keep watering.
+        from .runtime_checkpoint import checkpoint_store
+
+        stored = await checkpoint_store(hass).async_load() or {}
+        programs_cp = stored.get("programs") or {}
+        entry_cp = programs_cp.get(entry.entry_id)
+
         # store an object for your platforms to access
-        hass.data[DOMAIN][entry.entry_id] = {ATTR_NAME: entry.data.get(ATTR_NAME)}
+        hass.data[DOMAIN][entry.entry_id] = {
+            ATTR_NAME: entry.data.get(ATTR_NAME),
+            ATTR_RUNTIME_CHECKPOINT: entry_cp,
+        }
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS1)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS2)
 

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.components.persistent_notification import async_create, async_dismiss
 from homeassistant.components.switch import ENTITY_ID_FORMAT, SwitchEntity
-from homeassistant.const import MATCH_ALL
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, MATCH_ALL
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.entity import async_generate_entity_id
 from homeassistant.helpers.event import (
@@ -31,18 +31,26 @@ from .const import (
     ATTR_IRRIGATION_ON,
     ATTR_PAUSE,
     ATTR_REMAINING,
+    ATTR_RUNTIME_CHECKPOINT,
     ATTR_RUN_FREQ,
     ATTR_SHOW_CONFIG,
     ATTR_START,
+    CONST_CHECKPOINT_INTERVAL,
     CONST_NEXT_RUN_DEBOUNCE,
     CONST_NEXT_RUN_DEBOUNCE_LOW_POWER,
     CONST_OFF,
     CONST_ON,
     CONST_PENDING,
+    DOMAIN,
     TIME_STR_FORMAT,
 )
 from .globals import PROGRAMS, QUEUEDPROGRAMS
 from .pump import PumpClass
+from .runtime_checkpoint import (
+    apply_downtime,
+    build_checkpoint,
+    checkpoint_store,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,7 +92,11 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         self._unsub_pause = None
         self._unsub_pause_water = None
         self._unsub_next_run_debounce = None
+        self._unsub_ha_stop = None
         self._start_time = dt_util.as_local(dt_util.now())
+        self._last_checkpoint_monotonic = 0.0
+        self._resume_overrides: dict[str, int] = {}
+        self._ha_stopping = False
 
         self._pumps = []
         self._run_zones = []  # list of zones to run
@@ -354,6 +366,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         if self._unsub_next_run_debounce:
             self._unsub_next_run_debounce()
             self._unsub_next_run_debounce = None
+        if self._unsub_ha_stop:
+            self._unsub_ha_stop()
+            self._unsub_ha_stop = None
 
     def get_next_interval(self):
         """Next time an update should occur."""
@@ -522,6 +537,216 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             self._hass, debounce, _run
         )
 
+    def _zone_remaining_seconds(self, zone: ZoneData) -> int:
+        """Best-effort remaining seconds for a zone (sensor or switch)."""
+        try:
+            val = zone.remaining_time.numeric_value
+            if val is not None:
+                return max(0, int(val))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return max(0, int(zone.switch.remaining_time_value))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _find_zone_by_solenoid(self, solenoid: str) -> ZoneData | None:
+        for zone in self._zones:
+            if zone.zone == solenoid:
+                return zone
+        return None
+
+    async def async_save_checkpoint(self, *, force: bool = False) -> None:
+        """Persist mid-cycle state so a reboot can resume watering."""
+        if not self._state and not self._running_zones and not self._remaining_zones:
+            return
+
+        now_mono = self._hass.loop.time()
+        if (
+            not force
+            and now_mono - self._last_checkpoint_monotonic < CONST_CHECKPOINT_INTERVAL
+        ):
+            return
+        self._last_checkpoint_monotonic = now_mono
+
+        running = []
+        for zone in list(self._running_zones):
+            if not zone.zone:
+                continue
+            running.append(
+                {
+                    "solenoid": zone.zone,
+                    "remaining_s": self._zone_remaining_seconds(zone),
+                }
+            )
+        remaining = []
+        for zone in list(self._remaining_zones):
+            if not zone.zone:
+                continue
+            rem = self._zone_remaining_seconds(zone)
+            if rem <= 0:
+                try:
+                    rem = max(0, int(zone.default_run_time.numeric_value or 0))
+                except Exception:  # noqa: BLE001
+                    rem = 0
+            remaining.append({"solenoid": zone.zone, "remaining_s": rem})
+
+        if not running and not remaining:
+            return
+
+        payload = build_checkpoint(
+            program_unique_id=self._attr_unique_id,
+            program_name=self._name,
+            scheduled=self._scheduled,
+            start_time=self._start_time,
+            paused=self._paused,
+            running=running,
+            remaining=remaining,
+        )
+
+        store = checkpoint_store(self._hass)
+        data = await store.async_load() or {}
+        programs = dict(data.get("programs") or {})
+        programs[self._attr_unique_id] = payload
+        data["programs"] = programs
+        await store.async_save(data)
+
+        # Keep in-memory copy for zone startup checks on next boot path
+        entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
+        if entry is not None:
+            entry[ATTR_RUNTIME_CHECKPOINT] = payload
+
+        _LOGGER.debug(
+            "Irrigation checkpoint saved for %s (%d running, %d queued)",
+            self._name,
+            len(running),
+            len(remaining),
+        )
+
+    async def async_clear_checkpoint(self) -> None:
+        """Remove persisted mid-cycle state after a clean finish/stop."""
+        store = checkpoint_store(self._hass)
+        data = await store.async_load() or {}
+        programs = dict(data.get("programs") or {})
+        if self._attr_unique_id in programs:
+            programs.pop(self._attr_unique_id, None)
+            data["programs"] = programs
+            await store.async_save(data)
+        entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
+        if entry is not None:
+            entry[ATTR_RUNTIME_CHECKPOINT] = None
+        self._resume_overrides = {}
+
+    async def async_resume_from_checkpoint(self) -> bool:
+        """Resume a cycle interrupted by HA restart. Returns True if resumed."""
+        entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id, {})
+        raw = entry.get(ATTR_RUNTIME_CHECKPOINT)
+        if not raw:
+            # Fallback: load from Store in case platforms started without it
+            stored = await checkpoint_store(self._hass).async_load() or {}
+            raw = (stored.get("programs") or {}).get(self._attr_unique_id)
+        adjusted = apply_downtime(raw) if raw else None
+        if not adjusted:
+            await self.async_clear_checkpoint()
+            return False
+
+        if self._state or not self._finished:
+            _LOGGER.warning(
+                "Skip resume for %s: program already active", self._name
+            )
+            return False
+
+        running_items = list(adjusted.get("running") or [])
+        remaining_items = list(adjusted.get("remaining") or [])
+        if not running_items and not remaining_items:
+            await self.async_clear_checkpoint()
+            return False
+
+        _LOGGER.info(
+            "Resuming irrigation %s after reboot (downtime=%ss, running=%d, queued=%d)",
+            self._name,
+            adjusted.get("downtime_s", 0),
+            len(running_items),
+            len(remaining_items),
+        )
+
+        self._stop = False
+        self._state = True
+        self._finished = False
+        self._scheduled = bool(adjusted.get("scheduled", False))
+        self._paused = bool(adjusted.get("paused", False))
+        start_raw = adjusted.get("start_time")
+        if start_raw:
+            parsed = dt_util.parse_datetime(start_raw)
+            if parsed:
+                self._start_time = dt_util.as_local(parsed)
+
+        self._run_zones = []
+        self._remaining_zones = []
+        self._running_zones = []
+        self._resume_overrides = {}
+
+        # Queued zones first (not yet started)
+        for item in remaining_items:
+            zone = self._find_zone_by_solenoid(item.get("solenoid"))
+            if not zone or not zone.switch:
+                continue
+            rem = int(item.get("remaining_s", 0))
+            zone.switch._remaining_time = rem  # noqa: SLF001
+            zone.switch._water_adjust_prior = 1  # noqa: SLF001
+            zone.switch._status = CONST_PENDING  # noqa: SLF001
+            zone.switch._status_sensor = CONST_PENDING  # noqa: SLF001
+            await zone.switch.status_sensor_set()
+            await zone.switch.remaining_time_set()
+            self._remaining_zones.append(zone)
+            self._run_zones.append(zone)
+            self._resume_overrides[zone.zone] = rem
+
+        # Currently watering zones — put at front of queue and launch via monitor
+        for item in reversed(running_items):
+            zone = self._find_zone_by_solenoid(item.get("solenoid"))
+            if not zone or not zone.switch:
+                continue
+            rem = int(item.get("remaining_s", 0))
+            if rem <= 0:
+                continue
+            zone.switch._remaining_time = rem  # noqa: SLF001
+            zone.switch._water_adjust_prior = 1  # noqa: SLF001
+            zone.switch._status = CONST_PENDING  # noqa: SLF001
+            zone.switch._status_sensor = CONST_PENDING  # noqa: SLF001
+            await zone.switch.status_sensor_set()
+            await zone.switch.remaining_time_set()
+            self._remaining_zones.insert(0, zone)
+            if zone not in self._run_zones:
+                self._run_zones.insert(0, zone)
+            self._resume_overrides[zone.zone] = rem
+
+        if not self._remaining_zones:
+            await self.async_clear_checkpoint()
+            self._state = False
+            self._finished = True
+            return False
+
+        self.async_schedule_update_ha_state()
+
+        async def _resume_runner(_now=None):
+            try:
+                await self.run_monitor_zones()
+                while self._program_remaining > 0 and not self._stop:
+                    await self.run_monitor_zones()
+                event_data = {
+                    "action": "program_turned_off",
+                    "device_id": self.entity_id,
+                    "program": self.name,
+                }
+                self._hass.bus.async_fire("irrigation_event", event_data)
+                await self.async_turn_off()
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Resume runner failed for %s", self._name)
+
+        self.hass.async_create_task(_resume_runner())
+        return True
+
     async def async_added_to_hass(self):
         """Add listener."""
         self._unsub_point_in_time = async_track_point_in_utc_time(
@@ -554,9 +779,22 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             await asyncio.sleep(0)
             await self.set_up_entity_monitoring()
 
+            # Resume mid-cycle watering interrupted by a reboot
+            await self.async_resume_from_checkpoint()
+
         # setup the callback to kick in when HASS has started
         # listen for config_flow change and apply the updates
         self._unsub_start = async_at_started(self._hass, hass_started)
+
+        @callback
+        def _on_ha_stop(_event: Event) -> None:
+            """Flush checkpoint on shutdown — leave valves open for resume."""
+            self._ha_stopping = True
+            self._hass.async_create_task(self.async_save_checkpoint(force=True))
+
+        self._unsub_ha_stop = self._hass.bus.async_listen(
+            EVENT_HOMEASSISTANT_STOP, _on_ha_stop
+        )
 
         await super().async_added_to_hass()
 
@@ -976,6 +1214,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         await self.calculate_program_remaining(
             self._running_zones, self._remaining_zones, 0, False
         )
+        await self.async_save_checkpoint()
         await asyncio.sleep(1)
 
         if (
@@ -1045,7 +1284,12 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         #need to pass the program start time to support running across midnight
         #this will be the last_ran time for the zone
 
-        self.hass.async_create_task(zone.switch.async_turn_on_from_program(last,self._start_time))
+        override = self._resume_overrides.pop(zone.zone, None) if zone.zone else None
+        self.hass.async_create_task(
+            zone.switch.async_turn_on_from_program(
+                last, self._start_time, remaining_override=override
+            )
+        )
         await asyncio.sleep(0)
 
     async def async_turn_on(self, **kwargs):
@@ -1119,6 +1363,16 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         """Stop the switch/program."""
 
         self._stop = True
+
+        # HA is shutting down: keep valves open and preserve checkpoint so the
+        # cycle can resume after reboot. Do not clear Store or close solenoids.
+        if self._ha_stopping:
+            await self.async_save_checkpoint(force=True)
+            self._state = False
+            self._finished = True
+            self.async_schedule_update_ha_state()
+            return
+
         if self._pumps:
             event_data = {
                 "action": "turn_off_pump_all",
@@ -1147,3 +1401,4 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         if len(QUEUEDPROGRAMS) > 0:
             await QUEUEDPROGRAMS[0].pause_switch.async_turn_off()
         self._remaining_zones.clear()
+        await self.async_clear_checkpoint()
