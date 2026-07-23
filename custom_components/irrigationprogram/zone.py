@@ -457,7 +457,27 @@ class Zone(SwitchEntity, RestoreEntity):
 
     async def should_run_ex(self, scheduled=True):
         """Determine if the zone should run."""
-        if self.status.state in [
+        # Stale-cache guard: status sensor may still say unavailable after the
+        # solenoid recovered (monitor historically ignored valve.*). Re-check
+        # live before skipping the zone — see docs/design-zone-status-valve-cache.md
+        cached = self.status.state
+        if cached == CONST_UNAVAILABLE:
+            live = await self.get_status()
+            if live == CONST_UNAVAILABLE:
+                return False
+            _LOGGER.info(
+                "Zone %s: status cache was unavailable but live status is %s; refreshing cache",
+                self._name,
+                live,
+            )
+            self._status = (
+                CONST_RAINING if live == CONST_RAINING_STOP else live
+            )
+            self._status_sensor = self._status
+            await self.status_sensor_set()
+            cached = self._status_sensor
+
+        if cached in [
             CONST_DISABLED,
             CONST_UNAVAILABLE,
             CONST_ADJUSTED_OFF,
@@ -467,7 +487,7 @@ class Zone(SwitchEntity, RestoreEntity):
             return False
 
         # Zone is disabled and not started from the zone (from the program)
-        if self.status.state == CONST_ZONE_DISABLED and not self._zone_manual_start:
+        if cached == CONST_ZONE_DISABLED and not self._zone_manual_start:
             return False
 
         # A manual start
