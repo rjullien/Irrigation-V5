@@ -111,7 +111,12 @@ def apply_downtime(
         return None
     checkpoint_ts = dt_util.as_utc(checkpoint_ts)
     now_utc = dt_util.as_utc(now or dt_util.utcnow())
-    delta = max(0, int((now_utc - checkpoint_ts).total_seconds()))
+    # Paused cycles (user pause or interlock wait) are not watering — do not
+    # consume remaining time for wall-clock downtime while paused.
+    if checkpoint.get("paused"):
+        delta = 0
+    else:
+        delta = max(0, int((now_utc - checkpoint_ts).total_seconds()))
 
     running_src = list(checkpoint.get("running") or [])
     remaining_src = list(checkpoint.get("remaining") or [])
@@ -119,11 +124,14 @@ def apply_downtime(
     total_at_cp = sum(max(0, int(i.get("remaining_s", 0))) for i in running_src) + sum(
         max(0, int(i.get("remaining_s", 0))) for i in remaining_src
     )
-    if delta > total_at_cp + MAX_RESUME_OVERSHOOT_S:
+    # Stale guard still applies to paused checkpoints using wall-clock age so a
+    # week-old paused snapshot is not resurrected after a long HA outage.
+    age_s = max(0, int((now_utc - checkpoint_ts).total_seconds()))
+    if age_s > total_at_cp + MAX_RESUME_OVERSHOOT_S:
         _LOGGER.warning(
-            "Irrigation checkpoint stale for %s: downtime=%ss > remaining=%ss + grace=%ss; discarding",
+            "Irrigation checkpoint stale for %s: age=%ss > remaining=%ss + grace=%ss; discarding",
             checkpoint.get("program_name") or checkpoint.get("program_unique_id"),
-            delta,
+            age_s,
             total_at_cp,
             MAX_RESUME_OVERSHOOT_S,
         )
@@ -204,6 +212,9 @@ def zone_should_skip_startup_off(
     """True if this solenoid was watering at checkpoint — keep valve open."""
     if not checkpoint or not solenoid:
         return False
+    # Paused = valves should be closed (user pause / interlock wait).
+    if checkpoint.get("paused"):
+        return False
     data = adjusted if adjusted is not None else apply_downtime(checkpoint)
     if not data:
         return False
@@ -252,35 +263,70 @@ def find_program_by_unique_id(unique_id: str):
     return None
 
 
-async def async_restore_interlock_queue(hass: HomeAssistant) -> list:
+async def async_restore_interlock_queue(
+    hass: HomeAssistant,
+    *,
+    force_partial: bool = False,
+) -> list:
     """Rebuild QUEUEDPROGRAMS once from the persisted interlock order.
 
-    Safe to call from every program at startup — only the first call loads.
-    Supports N programs behind interlock after a reboot.
+    Safe to call from every program at startup — only marks restored when every
+    queue member that still has a loaded config entry is resolvable in
+    ``PROGRAMS``. Otherwise returns the current queue without setting the flag
+    so a later program can complete the restore (avoids boot-order races).
+
+    ``force_partial=True`` accepts whatever is resolvable now (timeout path).
     """
     from .globals import QUEUEDPROGRAMS
 
     domain = hass.data.setdefault(DOMAIN, {})
     if domain.get("_interlock_queue_restored"):
         return list(QUEUEDPROGRAMS)
-    domain["_interlock_queue_restored"] = True
 
     async with checkpoint_lock(hass):
         store = checkpoint_store(hass)
         data = await store.async_load() or {}
         queue_ids = list(data.get("interlock_queue") or [])
 
+    if not queue_ids:
+        domain["_interlock_queue_restored"] = True
+        QUEUEDPROGRAMS.clear()
+        return []
+
+    # Config-entry keys in hass.data[DOMAIN] (exclude internal _* keys).
+    active_entry_ids = {
+        key for key in domain if isinstance(key, str) and not key.startswith("_")
+    }
+    required_ids = [uid for uid in queue_ids if uid in active_entry_ids]
+
     rebuilt = []
+    missing_required = []
     for uid in queue_ids:
         prog = find_program_by_unique_id(uid)
         if prog is not None:
             rebuilt.append(prog)
+        elif uid in active_entry_ids:
+            missing_required.append(uid)
         else:
             _LOGGER.warning(
                 "Interlock queue references missing program unique_id=%s; skipping",
                 uid,
             )
 
+    if missing_required and not force_partial:
+        _LOGGER.debug(
+            "Interlock queue incomplete; waiting for programs: %s",
+            ", ".join(missing_required),
+        )
+        return list(QUEUEDPROGRAMS)
+
+    if missing_required and force_partial:
+        _LOGGER.warning(
+            "Interlock queue restored partially; unresolved programs: %s",
+            ", ".join(missing_required),
+        )
+
+    domain["_interlock_queue_restored"] = True
     QUEUEDPROGRAMS.clear()
     QUEUEDPROGRAMS.extend(rebuilt)
     if rebuilt:
@@ -290,6 +336,29 @@ async def async_restore_interlock_queue(hass: HomeAssistant) -> list:
             ", ".join(getattr(p, "name", str(p)) for p in rebuilt),
         )
     return list(QUEUEDPROGRAMS)
+
+
+# How long resume waits for sibling programs before accepting a partial queue.
+INTERLOCK_RESTORE_WAIT_S = 5.0
+INTERLOCK_RESTORE_POLL_S = 0.1
+
+
+async def async_restore_interlock_queue_ready(hass: HomeAssistant) -> list:
+    """Restore interlock queue, waiting briefly for sibling programs to register."""
+    domain = hass.data.setdefault(DOMAIN, {})
+    if domain.get("_interlock_queue_restored"):
+        from .globals import QUEUEDPROGRAMS
+
+        return list(QUEUEDPROGRAMS)
+
+    deadline = asyncio.get_running_loop().time() + INTERLOCK_RESTORE_WAIT_S
+    while True:
+        queue = await async_restore_interlock_queue(hass)
+        if domain.get("_interlock_queue_restored"):
+            return queue
+        if asyncio.get_running_loop().time() >= deadline:
+            return await async_restore_interlock_queue(hass, force_partial=True)
+        await asyncio.sleep(INTERLOCK_RESTORE_POLL_S)
 
 
 def current_interlock_queue_ids() -> list[str]:

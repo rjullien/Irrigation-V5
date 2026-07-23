@@ -130,6 +130,34 @@ def test_zone_should_skip_startup_off():
     )
 
 
+def test_apply_downtime_paused_does_not_consume_remaining():
+    """Paused checkpoints keep full remaining (pause ≠ watering)."""
+    cp, now = _cp(
+        running=[{"solenoid": "valve.z2", "remaining_s": 600}],
+        remaining=[{"solenoid": "valve.z3", "remaining_s": 1800}],
+        age_s=900,
+    )
+    cp["paused"] = True
+    adjusted = apply_downtime(cp, now=now, sequential=True)
+    assert adjusted is not None
+    assert adjusted["downtime_s"] == 0
+    assert adjusted["running"][0]["remaining_s"] == 600
+    assert adjusted["remaining"][0]["remaining_s"] == 1800
+
+
+def test_zone_should_not_skip_startup_off_when_paused():
+    cp, now = _cp(
+        running=[{"solenoid": "valve.z2", "remaining_s": 400}],
+        remaining=[],
+        age_s=0,
+    )
+    cp["paused"] = True
+    adjusted = apply_downtime(cp, now=now)
+    assert (
+        zone_should_skip_startup_off(cp, "valve.z2", adjusted=adjusted) is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_zone_set_resume_state():
     """async_set_resume_state is the public resume API (no private attr poking)."""
@@ -399,9 +427,14 @@ async def test_resume_preserves_user_pause(monkeypatch):
             "custom_components.irrigationprogram.program.async_restore_interlock_queue",
             AsyncMock(return_value=[]),
         )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_restore_interlock_queue_ready",
+            AsyncMock(return_value=[]),
+        )
         prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
         prog.hass = hass
         prog.async_schedule_update_ha_state = MagicMock()
+        prog.remaining_time_set = AsyncMock()
         # degree_of_parallel reads program.parallel
         program_data.inter_zone_delay = None
 
@@ -410,10 +443,229 @@ async def test_resume_preserves_user_pause(monkeypatch):
     try:
         assert ok is True
         assert prog._paused is True
+        assert prog._program_remaining > 0  # seeded — runner must not exit early
         pause.async_turn_on.assert_awaited()
         pause.async_turn_off.assert_not_awaited()
     finally:
         QUEUEDPROGRAMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_paused_resume_runner_does_not_turn_off(monkeypatch):
+    """Paused resume runner must spin on pause, not call async_turn_off."""
+    from custom_components.irrigationprogram.const import (
+        ATTR_RUNTIME_CHECKPOINT,
+        DOMAIN,
+    )
+    from custom_components.irrigationprogram.globals import QUEUEDPROGRAMS
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    now = dt_util.utcnow()
+    cp = build_checkpoint(
+        program_unique_id="uid",
+        program_name="Arrosage",
+        scheduled=True,
+        start_time=now,
+        paused=True,
+        running=[{"solenoid": "valve.z1", "remaining_s": 300}],
+        remaining=[],
+    )
+    cp["checkpoint_ts"] = now.isoformat()
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.loop = MagicMock()
+    hass.loop.time = MagicMock(return_value=100.0)
+    hass.data = {
+        DOMAIN: {
+            "uid": {ATTR_RUNTIME_CHECKPOINT: cp},
+            "_interlock_queue_restored": True,
+        }
+    }
+    hass.bus = MagicMock()
+    created = []
+
+    def _capture_task(coro):
+        created.append(coro)
+        return MagicMock()
+
+    hass.async_create_task = _capture_task
+
+    pause = MagicMock()
+    pause.async_turn_on = AsyncMock()
+    pause.async_turn_off = AsyncMock()
+    program_data = MagicMock()
+    program_data.name = "Arrosage"
+    program_data.low_power = False
+    program_data.interlock = False
+    program_data.pause = pause
+    program_data.pump = None
+    program_data.parallel = 1
+    program_data.inter_zone_delay = None
+
+    zone_switch = MagicMock()
+    zone_switch.async_set_resume_state = AsyncMock()
+    zone_switch.async_solenoid_turn_off = AsyncMock()
+    zone_data = MagicMock()
+    zone_data.zone = "valve.z1"
+    zone_data.switch = zone_switch
+    zone_data.remaining_time = MagicMock(numeric_value=300)
+    zone_data.default_run_time = MagicMock(numeric_value=300)
+    zone_data.status = MagicMock(state="pending")
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = [zone_data]
+
+    QUEUEDPROGRAMS.clear()
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.arrosage",
+        )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_restore_interlock_queue",
+            AsyncMock(return_value=[]),
+        )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_restore_interlock_queue_ready",
+            AsyncMock(return_value=[]),
+        )
+        prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
+        prog.hass = hass
+        prog.async_schedule_update_ha_state = MagicMock()
+        prog.remaining_time_set = AsyncMock()
+        prog.async_turn_off = AsyncMock()
+
+        ok = await prog.async_resume_from_checkpoint()
+        assert ok is True
+        assert created, "resume runner was not scheduled"
+        assert prog._program_remaining >= 300
+
+        spins = {"n": 0}
+
+        async def _sleep(_seconds):
+            spins["n"] += 1
+            if spins["n"] >= 3:
+                prog._stop = True
+
+        mp.setattr(
+            "custom_components.irrigationprogram.program.asyncio.sleep",
+            _sleep,
+        )
+        await created[0]
+
+    try:
+        assert spins["n"] >= 3
+        prog.async_turn_off.assert_not_awaited()
+    finally:
+        QUEUEDPROGRAMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_force_save_clears_stale_when_no_zones(monkeypatch):
+    """HA stop with empty zone lists must clear Store, not re-save old CP."""
+    from custom_components.irrigationprogram.const import (
+        ATTR_RUNTIME_CHECKPOINT,
+        DOMAIN,
+    )
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.loop = MagicMock()
+    hass.loop.time = MagicMock(return_value=100.0)
+    hass.data = {
+        DOMAIN: {
+            "uid": {
+                ATTR_RUNTIME_CHECKPOINT: {
+                    "version": 1,
+                    "running": [{"solenoid": "valve.old", "remaining_s": 10}],
+                }
+            }
+        }
+    }
+    hass.bus = MagicMock()
+
+    program_data = MagicMock()
+    program_data.name = "Arrosage"
+    program_data.low_power = False
+    program_data.interlock = False
+    program_data.pause = MagicMock()
+    program_data.pump = None
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = []
+
+    update = AsyncMock()
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.arrosage",
+        )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_update_program_checkpoint",
+            update,
+        )
+        prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
+        prog._state = False
+        prog._running_zones = []
+        prog._remaining_zones = []
+        await prog.async_save_checkpoint(force=True)
+
+    update.assert_awaited()
+    assert update.await_args.args[2] is None  # payload cleared
+    assert hass.data[DOMAIN]["uid"][ATTR_RUNTIME_CHECKPOINT] is None
+
+
+@pytest.mark.asyncio
+async def test_restore_interlock_waits_for_missing_program():
+    """Do not mark queue restored while a loaded entry's program is missing."""
+    from custom_components.irrigationprogram.const import DOMAIN
+    from custom_components.irrigationprogram.globals import PROGRAMS, QUEUEDPROGRAMS
+    from custom_components.irrigationprogram.runtime_checkpoint import (
+        async_restore_interlock_queue,
+    )
+
+    QUEUEDPROGRAMS.clear()
+    PROGRAMS.clear()
+    hass = MagicMock()
+    # Both entries loaded, but only head registered in PROGRAMS yet
+    hass.data = {DOMAIN: {"prog-a": {}, "prog-b": {}}}
+
+    head = MagicMock()
+    head._attr_unique_id = "prog-a"
+    head.name = "A"
+    PROGRAMS["A"] = head
+
+    stored = {"interlock_queue": ["prog-a", "prog-b"], "programs": {}}
+
+    class _Store:
+        async def async_load(self):
+            return stored
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.runtime_checkpoint.checkpoint_store",
+            lambda _hass: _Store(),
+        )
+        q1 = await async_restore_interlock_queue(hass)
+        assert hass.data[DOMAIN].get("_interlock_queue_restored") is not True
+        assert q1 == []
+
+        tail = MagicMock()
+        tail._attr_unique_id = "prog-b"
+        tail.name = "B"
+        PROGRAMS["B"] = tail
+
+        q2 = await async_restore_interlock_queue(hass)
+        assert hass.data[DOMAIN]["_interlock_queue_restored"] is True
+        assert q2 == [head, tail]
+
+    QUEUEDPROGRAMS.clear()
+    PROGRAMS.clear()
+    hass.data[DOMAIN].pop("_interlock_queue_restored", None)
 
 
 @pytest.mark.asyncio

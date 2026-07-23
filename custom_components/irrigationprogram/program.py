@@ -49,6 +49,7 @@ from .pump import PumpClass
 from .runtime_checkpoint import (
     apply_downtime,
     async_restore_interlock_queue,
+    async_restore_interlock_queue_ready,
     async_update_program_checkpoint,
     build_checkpoint,
     checkpoint_store,
@@ -624,14 +625,17 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
         if not self._state and not self._running_zones and not self._remaining_zones:
             if force:
-                # HA stop: still flush interlock queue even with nothing to water
-                entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id, {})
+                # HA stop with nothing active: clear any stale checkpoint for
+                # this program (do NOT re-save an old payload) but flush queue.
                 await async_update_program_checkpoint(
                     self._hass,
                     self._attr_unique_id,
-                    entry.get(ATTR_RUNTIME_CHECKPOINT),
+                    None,
                     interlock_queue=queue_ids,
                 )
+                entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
+                if entry is not None:
+                    entry[ATTR_RUNTIME_CHECKPOINT] = None
             return
 
         now_mono = self._hass.loop.time()
@@ -675,13 +679,17 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
         if not running and not remaining:
             if force:
-                entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id, {})
+                # Active lists empty (cycle just finished) — clear stale Store
+                # entry rather than resurrecting the previous checkpoint.
                 await async_update_program_checkpoint(
                     self._hass,
                     self._attr_unique_id,
-                    entry.get(ATTR_RUNTIME_CHECKPOINT),
+                    None,
                     interlock_queue=queue_ids,
                 )
+                entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
+                if entry is not None:
+                    entry[ATTR_RUNTIME_CHECKPOINT] = None
             return
 
         payload = build_checkpoint(
@@ -769,8 +777,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         # Close valves that boot kept open but T1 says are done
         await self.async_reconcile_solenoids(raw, adjusted)
 
-        # Rebuild interlock order before deciding whether we may water now
-        await async_restore_interlock_queue(self._hass)
+        # Rebuild interlock order before deciding whether we may water now.
+        # Waits briefly so sibling programs can register (boot-order race).
+        await async_restore_interlock_queue_ready(self._hass)
         if self.interlock and not any(p is self for p in QUEUEDPROGRAMS):
             # We were mid-cycle; ensure we appear in the live queue
             QUEUEDPROGRAMS.append(self)
@@ -854,18 +863,32 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         else:
             await self.pause_switch.async_turn_off()
 
+        # Seed remaining from resume overrides so a paused runner does not see
+        # ``_program_remaining == 0`` and call async_turn_off immediately.
+        seeded = sum(max(0, int(v)) for v in self._resume_overrides.values())
+        if seeded <= 0:
+            seeded = sum(
+                max(0, self._zone_remaining_seconds(z)) for z in self._remaining_zones
+            )
+        self._program_remaining = max(seeded, 1 if self._remaining_zones else 0)
+        await self.remaining_time_set()
+
         self.async_schedule_update_ha_state()
 
         async def _resume_runner(_now=None):
-            # Same control loop as async_turn_on after build_run_script.
-            # zone_turn_on → async_turn_on_from_program with remaining_override;
-            # async_solenoid_turn_on() on an already-open Tuya valve is idempotent.
-            # If must_wait, run_monitor_zones spins on _paused until unpaused
-            # by the previous program's async_turn_off (interlock hand-off).
+            # Same control loop as async_turn_on after build_run_script, but
+            # keep spinning while paused (interlock wait / user pause) even
+            # when remaining has not been recalculated yet.
             try:
-                await self.run_monitor_zones()
-                while self._program_remaining > 0 and not self._stop:
+                while not self._stop and (
+                    self._paused
+                    or self._program_remaining > 0
+                    or self._remaining_zones
+                    or self._running_zones
+                ):
                     await self.run_monitor_zones()
+                if self._stop:
+                    return
                 event_data = {
                     "action": "program_turned_off",
                     "device_id": self.entity_id,
