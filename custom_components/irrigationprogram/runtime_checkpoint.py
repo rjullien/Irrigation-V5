@@ -10,6 +10,8 @@ remaining time adjusted for downtime.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -19,16 +21,31 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 
+_LOGGER = logging.getLogger(__name__)
+
 STORAGE_KEY = f"{DOMAIN}.runtime_checkpoint"
 STORAGE_VERSION = 1
 
-# Drop resume if downtime exceeds remaining + this grace (seconds)
+# Reject resume when downtime exceeds (sum of checkpoint remainings) + grace.
+# Avoids resurrecting a cycle days later after HA was offline.
 MAX_RESUME_OVERSHOOT_S = 300
+
+_CHECKPOINT_LOCK_KEY = "_runtime_checkpoint_lock"
 
 
 def checkpoint_store(hass: HomeAssistant) -> Store:
     """Return the shared Store for all irrigation programs."""
     return Store(hass, STORAGE_VERSION, STORAGE_KEY)
+
+
+def checkpoint_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """Process-wide lock for read-modify-write on the shared Store."""
+    domain = hass.data.setdefault(DOMAIN, {})
+    lock = domain.get(_CHECKPOINT_LOCK_KEY)
+    if lock is None:
+        lock = asyncio.Lock()
+        domain[_CHECKPOINT_LOCK_KEY] = lock
+    return lock
 
 
 def _iso(now: datetime | None = None) -> str:
@@ -45,7 +62,10 @@ def build_checkpoint(
     running: list[dict[str, Any]],
     remaining: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build a serialisable checkpoint payload."""
+    """Build a serialisable checkpoint payload.
+
+    ``program_unique_id`` is also the Store dict key (``entry.entry_id``).
+    """
     return {
         "version": STORAGE_VERSION,
         "program_unique_id": program_unique_id,
@@ -60,11 +80,24 @@ def build_checkpoint(
 
 
 def apply_downtime(
-    checkpoint: dict[str, Any], now: datetime | None = None
+    checkpoint: dict[str, Any],
+    now: datetime | None = None,
+    *,
+    sequential: bool = True,
 ) -> dict[str, Any] | None:
     """Subtract elapsed downtime from remaining seconds.
 
-    Returns None if nothing left to run (or checkpoint is stale/invalid).
+    Returns None if nothing left to run, checkpoint is invalid, or too stale
+    (downtime > total remaining at checkpoint + ``MAX_RESUME_OVERSHOOT_S``).
+
+    Sequential programs (``sequential=True``, parallel=1): excess downtime
+    after running zones finish spills into the queued zones in order, so the
+    schedule timeline stays coherent (later zones are shortened / skipped if
+    the outage covered their slot). Note: during the outage only the running
+    solenoid stays open in hardware — queued valves stay closed — so this is
+    a schedule-correctness choice, not a perfect water-volume reconstruction.
+
+    Parallel programs: only running zones are reduced; queued keep full remaining.
     """
     if not checkpoint or checkpoint.get("version") != STORAGE_VERSION:
         return None
@@ -79,44 +112,101 @@ def apply_downtime(
     now_utc = dt_util.as_utc(now or dt_util.utcnow())
     delta = max(0, int((now_utc - checkpoint_ts).total_seconds()))
 
+    running_src = list(checkpoint.get("running") or [])
+    remaining_src = list(checkpoint.get("remaining") or [])
+
+    total_at_cp = sum(max(0, int(i.get("remaining_s", 0))) for i in running_src) + sum(
+        max(0, int(i.get("remaining_s", 0))) for i in remaining_src
+    )
+    if delta > total_at_cp + MAX_RESUME_OVERSHOOT_S:
+        _LOGGER.warning(
+            "Irrigation checkpoint stale for %s: downtime=%ss > remaining=%ss + grace=%ss; discarding",
+            checkpoint.get("program_name") or checkpoint.get("program_unique_id"),
+            delta,
+            total_at_cp,
+            MAX_RESUME_OVERSHOOT_S,
+        )
+        return None
+
+    leftover = delta
     running_out: list[dict[str, Any]] = []
-    for item in checkpoint.get("running") or []:
-        rem = max(0, int(item.get("remaining_s", 0)) - delta)
-        if rem > 0:
-            running_out.append({**item, "remaining_s": rem})
-        # rem == 0 → zone finished during downtime; skip (do not re-water)
+    for item in running_src:
+        rem = max(0, int(item.get("remaining_s", 0)))
+        if rem > leftover:
+            running_out.append({**item, "remaining_s": rem - leftover})
+            leftover = 0
+        else:
+            leftover -= rem
+            _LOGGER.info(
+                "Zone %s finished during HA downtime (%ss of its remaining consumed)",
+                item.get("solenoid"),
+                rem,
+            )
 
     remaining_out: list[dict[str, Any]] = []
-    for item in checkpoint.get("remaining") or []:
-        # Queued zones have not started watering — keep full remaining
+    for item in remaining_src:
         rem = max(0, int(item.get("remaining_s", 0)))
-        if rem > 0:
+        if rem <= 0:
+            continue
+        if sequential and leftover > 0:
+            if rem > leftover:
+                remaining_out.append({**item, "remaining_s": rem - leftover})
+                _LOGGER.info(
+                    "Queued zone %s shortened by %ss (sequential downtime spill)",
+                    item.get("solenoid"),
+                    leftover,
+                )
+                leftover = 0
+            else:
+                _LOGGER.info(
+                    "Queued zone %s skipped (fully covered by sequential downtime)",
+                    item.get("solenoid"),
+                )
+                leftover -= rem
+        else:
             remaining_out.append({**item, "remaining_s": rem})
 
     if not running_out and not remaining_out:
         return None
 
-    # Safety: absurdly old checkpoint with huge remaining still OK to resume,
-    # but if downtime alone exceeds all running remainings + grace and queue
-    # empty, apply_downtime already returned empty running.
     out = dict(checkpoint)
     out["running"] = running_out
     out["remaining"] = remaining_out
     out["downtime_s"] = delta
-    out["checkpoint_ts"] = _iso(now_utc)
+    # Keep original checkpoint_ts — callers must not re-save this dict as a
+    # fresh checkpoint (use build_checkpoint for writes).
     return out
 
 
 def zone_should_skip_startup_off(
-    checkpoint: dict[str, Any] | None, solenoid: str | None
+    checkpoint: dict[str, Any] | None,
+    solenoid: str | None,
+    *,
+    adjusted: dict[str, Any] | None = None,
 ) -> bool:
     """True if this solenoid was watering at checkpoint — keep valve open."""
     if not checkpoint or not solenoid:
         return False
-    adjusted = apply_downtime(checkpoint)
-    if not adjusted:
+    data = adjusted if adjusted is not None else apply_downtime(checkpoint)
+    if not data:
         return False
-    for item in adjusted.get("running") or []:
+    for item in data.get("running") or []:
         if item.get("solenoid") == solenoid and int(item.get("remaining_s", 0)) > 0:
             return True
     return False
+
+
+async def async_update_program_checkpoint(
+    hass: HomeAssistant, program_unique_id: str, payload: dict[str, Any] | None
+) -> None:
+    """Atomically set or clear one program's checkpoint in the shared Store."""
+    async with checkpoint_lock(hass):
+        store = checkpoint_store(hass)
+        data = await store.async_load() or {}
+        programs = dict(data.get("programs") or {})
+        if payload is None:
+            programs.pop(program_unique_id, None)
+        else:
+            programs[program_unique_id] = payload
+        data["programs"] = programs
+        await store.async_save(data)

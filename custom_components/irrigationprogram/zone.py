@@ -33,6 +33,7 @@ from .const import (
     ATTR_REMAINING,
     ATTR_REPEAT,
     ATTR_RUN_FREQ,
+    ATTR_RUNTIME_CHECKPOINT,
     ATTR_SHOW_CONFIG,
     ATTR_WAIT,
     ATTR_WATER,
@@ -60,12 +61,17 @@ from .const import (
     CONST_VALVE,
     CONST_ZERO_FLOW_DELAY,
     CONST_ZONE_DISABLED,
+    DOMAIN,
     RAINBIRD,
     RAINBIRD_DURATION,
     RAINBIRD_TURN_ON,
     TIME_STR_FORMAT,
 )
 from .globals import ZONES
+from .runtime_checkpoint import (
+    apply_downtime,
+    zone_should_skip_startup_off,
+)
 
 VALID_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -98,7 +104,6 @@ class Zone(SwitchEntity, RestoreEntity):
         self._programdata = programdata
         self._zonedata = zonedata
         self._remaining_time = 0
-        self._resume_remaining_s = None
         self._remaining_override = None
         self._resume_segment_s = None
         self._default_run_time = 0
@@ -162,29 +167,31 @@ class Zone(SwitchEntity, RestoreEntity):
         # Keep solenoid open when resuming a mid-cycle watering after reboot.
         # Default path forces off so a restart cannot leave a valve open with
         # no software owner — but that also kills an active cycle.
-        from .const import ATTR_RUNTIME_CHECKPOINT, DOMAIN
-        from .runtime_checkpoint import zone_should_skip_startup_off
-
         entry_data = self.hass.data.get(DOMAIN, {}).get(
             self._programdata.unique_id, {}
         )
         checkpoint = entry_data.get(ATTR_RUNTIME_CHECKPOINT)
-        if zone_should_skip_startup_off(checkpoint, self.solenoid):
+        # Compute downtime once per zone setup (cheap); prefer shared adjusted
+        # dict if the program already stashed one under the same key shape.
+        adjusted = apply_downtime(checkpoint) if checkpoint else None
+        if zone_should_skip_startup_off(
+            checkpoint, self.solenoid, adjusted=adjusted
+        ):
             _LOGGER.info(
                 "Zone %s: skipping startup solenoid off (resume mid-cycle)",
                 self._name,
             )
-            self._resume_remaining_s = None
-            # Stash remaining for program resume path
-            from .runtime_checkpoint import apply_downtime
-
-            adjusted = apply_downtime(checkpoint) or {}
-            for item in adjusted.get("running") or []:
-                if item.get("solenoid") == self.solenoid:
-                    self._resume_remaining_s = int(item.get("remaining_s", 0))
-                    break
         else:
             await self.async_solenoid_turn_off()
+
+    async def async_set_resume_state(self, remaining_s: int, *, status: str = CONST_PENDING) -> None:
+        """Public API to rehydrate zone countdown/status before resume."""
+        self._remaining_time = max(0, int(remaining_s))
+        self._water_adjust_prior = 1
+        self._status = status
+        self._status_sensor = status
+        await self.status_sensor_set()
+        await self.remaining_time_set()
 
     @property
     def is_on(self) -> bool:
@@ -1444,6 +1451,8 @@ class Zone(SwitchEntity, RestoreEntity):
             return 0
 
         await self.async_solenoid_turn_on()
+        # Idempotent on controllers that already show open/on (e.g. Tuya after
+        # reboot mid-cycle). Rainbird-style devices may re-ack the same command.
 
         if self._remaining_override is not None:
             watertime = math.ceil(self._remaining_override)

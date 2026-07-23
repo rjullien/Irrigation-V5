@@ -49,6 +49,7 @@ from .pump import PumpClass
 from .runtime_checkpoint import (
     apply_downtime,
     build_checkpoint,
+    async_update_program_checkpoint,
     checkpoint_store,
 )
 
@@ -604,12 +605,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             remaining=remaining,
         )
 
-        store = checkpoint_store(self._hass)
-        data = await store.async_load() or {}
-        programs = dict(data.get("programs") or {})
-        programs[self._attr_unique_id] = payload
-        data["programs"] = programs
-        await store.async_save(data)
+        await async_update_program_checkpoint(
+            self._hass, self._attr_unique_id, payload
+        )
 
         # Keep in-memory copy for zone startup checks on next boot path
         entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
@@ -625,13 +623,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
     async def async_clear_checkpoint(self) -> None:
         """Remove persisted mid-cycle state after a clean finish/stop."""
-        store = checkpoint_store(self._hass)
-        data = await store.async_load() or {}
-        programs = dict(data.get("programs") or {})
-        if self._attr_unique_id in programs:
-            programs.pop(self._attr_unique_id, None)
-            data["programs"] = programs
-            await store.async_save(data)
+        await async_update_program_checkpoint(self._hass, self._attr_unique_id, None)
         entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
         if entry is not None:
             entry[ATTR_RUNTIME_CHECKPOINT] = None
@@ -645,7 +637,10 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             # Fallback: load from Store in case platforms started without it
             stored = await checkpoint_store(self._hass).async_load() or {}
             raw = (stored.get("programs") or {}).get(self._attr_unique_id)
-        adjusted = apply_downtime(raw) if raw else None
+        sequential = self.degree_of_parallel <= 1
+        adjusted = (
+            apply_downtime(raw, sequential=sequential) if raw else None
+        )
         if not adjusted:
             await self.async_clear_checkpoint()
             return False
@@ -692,12 +687,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             if not zone or not zone.switch:
                 continue
             rem = int(item.get("remaining_s", 0))
-            zone.switch._remaining_time = rem  # noqa: SLF001
-            zone.switch._water_adjust_prior = 1  # noqa: SLF001
-            zone.switch._status = CONST_PENDING  # noqa: SLF001
-            zone.switch._status_sensor = CONST_PENDING  # noqa: SLF001
-            await zone.switch.status_sensor_set()
-            await zone.switch.remaining_time_set()
+            await zone.switch.async_set_resume_state(rem, status=CONST_PENDING)
             self._remaining_zones.append(zone)
             self._run_zones.append(zone)
             self._resume_overrides[zone.zone] = rem
@@ -710,12 +700,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             rem = int(item.get("remaining_s", 0))
             if rem <= 0:
                 continue
-            zone.switch._remaining_time = rem  # noqa: SLF001
-            zone.switch._water_adjust_prior = 1  # noqa: SLF001
-            zone.switch._status = CONST_PENDING  # noqa: SLF001
-            zone.switch._status_sensor = CONST_PENDING  # noqa: SLF001
-            await zone.switch.status_sensor_set()
-            await zone.switch.remaining_time_set()
+            await zone.switch.async_set_resume_state(rem, status=CONST_PENDING)
             self._remaining_zones.insert(0, zone)
             if zone not in self._run_zones:
                 self._run_zones.insert(0, zone)
@@ -730,6 +715,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         self.async_schedule_update_ha_state()
 
         async def _resume_runner(_now=None):
+            # Same control loop as async_turn_on after build_run_script.
+            # zone_turn_on → async_turn_on_from_program with remaining_override;
+            # async_solenoid_turn_on() on an already-open Tuya valve is idempotent.
             try:
                 await self.run_monitor_zones()
                 while self._program_remaining > 0 and not self._stop:
@@ -788,7 +776,13 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
         @callback
         def _on_ha_stop(_event: Event) -> None:
-            """Flush checkpoint on shutdown — leave valves open for resume."""
+            """Flush checkpoint on shutdown — leave valves open for resume.
+
+            Fire-and-forget: HA may exit before the Store write completes.
+            That is OK — the periodic ~10s checkpoint is the durable baseline;
+            this flush only tries to shrink the last gap. Store uses atomic
+            write+rename so a torn write will not corrupt the previous file.
+            """
             self._ha_stopping = True
             self._hass.async_create_task(self.async_save_checkpoint(force=True))
 

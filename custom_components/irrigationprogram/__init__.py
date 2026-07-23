@@ -67,6 +67,7 @@ from .const import (
     DOMAIN,
 )
 from .globals import QUEUEDPROGRAMS
+from .runtime_checkpoint import checkpoint_store
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 PLATFORMS: list[str] = [
@@ -325,8 +326,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Load mid-cycle checkpoint BEFORE platforms so Zone.async_added_to_hass
         # can skip solenoid_turn_off for valves that should keep watering.
-        from .runtime_checkpoint import checkpoint_store
-
         stored = await checkpoint_store(hass).async_load() or {}
         programs_cp = stored.get("programs") or {}
         entry_cp = programs_cp.get(entry.entry_id)
