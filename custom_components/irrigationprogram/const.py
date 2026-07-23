@@ -15,6 +15,8 @@ SWITCH_ID_FORMAT = "switch.{}"
 
 # hass.data[DOMAIN][entry_id] key for mid-cycle resume snapshot
 ATTR_RUNTIME_CHECKPOINT = "runtime_checkpoint"
+# Precomputed apply_downtime() result (once per boot, shared by all zones)
+ATTR_RUNTIME_CHECKPOINT_ADJUSTED = "runtime_checkpoint_adjusted"
 # How often to persist remaining time while a program is running (seconds)
 CONST_CHECKPOINT_INTERVAL = 10
 

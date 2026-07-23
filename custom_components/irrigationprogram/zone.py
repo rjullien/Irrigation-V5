@@ -34,6 +34,7 @@ from .const import (
     ATTR_REPEAT,
     ATTR_RUN_FREQ,
     ATTR_RUNTIME_CHECKPOINT,
+    ATTR_RUNTIME_CHECKPOINT_ADJUSTED,
     ATTR_SHOW_CONFIG,
     ATTR_WAIT,
     ATTR_WATER,
@@ -171,9 +172,10 @@ class Zone(SwitchEntity, RestoreEntity):
             self._programdata.unique_id, {}
         )
         checkpoint = entry_data.get(ATTR_RUNTIME_CHECKPOINT)
-        # Compute downtime once per zone setup (cheap); prefer shared adjusted
-        # dict if the program already stashed one under the same key shape.
-        adjusted = apply_downtime(checkpoint) if checkpoint else None
+        # Prefer boot-time cached apply_downtime (once per entry, not per zone)
+        adjusted = entry_data.get(ATTR_RUNTIME_CHECKPOINT_ADJUSTED)
+        if adjusted is None and checkpoint:
+            adjusted = apply_downtime(checkpoint)
         if zone_should_skip_startup_off(
             checkpoint, self.solenoid, adjusted=adjusted
         ):
@@ -1379,8 +1381,17 @@ class Zone(SwitchEntity, RestoreEntity):
             if self._stop:
                 break
 
-            # After a resume override, only run one water segment
+            # After a resume override, only run one water segment — eco
+            # wait/repeat cycles that were still pending are dropped.
             if remaining_override is not None:
+                if self.wait > 0 or self.repeat > 1:
+                    _LOGGER.warning(
+                        "Zone %s: resume override ends after one water segment; "
+                        "eco wait/repeat remainder skipped (wait=%s repeat=%s)",
+                        self._name,
+                        self.wait,
+                        self.repeat,
+                    )
                 break
 
             # wait cycle

@@ -561,7 +561,18 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
     async def async_save_checkpoint(self, *, force: bool = False) -> None:
         """Persist mid-cycle state so a reboot can resume watering."""
+        queue_ids = current_interlock_queue_ids()
+
         if not self._state and not self._running_zones and not self._remaining_zones:
+            if force:
+                # HA stop: still flush interlock queue even with nothing to water
+                entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id, {})
+                await async_update_program_checkpoint(
+                    self._hass,
+                    self._attr_unique_id,
+                    entry.get(ATTR_RUNTIME_CHECKPOINT),
+                    interlock_queue=queue_ids,
+                )
             return
 
         now_mono = self._hass.loop.time()
@@ -595,6 +606,14 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             remaining.append({"solenoid": zone.zone, "remaining_s": rem})
 
         if not running and not remaining:
+            if force:
+                entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id, {})
+                await async_update_program_checkpoint(
+                    self._hass,
+                    self._attr_unique_id,
+                    entry.get(ATTR_RUNTIME_CHECKPOINT),
+                    interlock_queue=queue_ids,
+                )
             return
 
         payload = build_checkpoint(
@@ -611,7 +630,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             self._hass,
             self._attr_unique_id,
             payload,
-            interlock_queue=current_interlock_queue_ids(),
+            interlock_queue=queue_ids,
         )
 
         # Keep in-memory copy for zone startup checks on next boot path
@@ -1407,6 +1426,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
         # HA is shutting down: keep valves open and preserve checkpoint so the
         # cycle can resume after reboot. Do not clear Store or close solenoids.
+        # Do NOT unpause the next interlock program here — QUEUEDPROGRAMS is
+        # persisted and restored after boot; waking the next program mid-stop
+        # would start watering into a dying HA process.
         if self._ha_stopping:
             await self.async_save_checkpoint(force=True)
             self._state = False
