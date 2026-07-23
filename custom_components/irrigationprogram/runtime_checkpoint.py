@@ -196,10 +196,21 @@ def zone_should_skip_startup_off(
     return False
 
 
+_UNSET = object()
+
+
 async def async_update_program_checkpoint(
-    hass: HomeAssistant, program_unique_id: str, payload: dict[str, Any] | None
+    hass: HomeAssistant,
+    program_unique_id: str,
+    payload: dict[str, Any] | None,
+    *,
+    interlock_queue: Any = _UNSET,
 ) -> None:
-    """Atomically set or clear one program's checkpoint in the shared Store."""
+    """Atomically set or clear one program's checkpoint in the shared Store.
+
+    Optionally refresh ``interlock_queue`` (list of program unique_ids) in the
+    same write so multi-program interlock order survives reboot.
+    """
     async with checkpoint_lock(hass):
         store = checkpoint_store(hass)
         data = await store.async_load() or {}
@@ -209,4 +220,67 @@ async def async_update_program_checkpoint(
         else:
             programs[program_unique_id] = payload
         data["programs"] = programs
+        if interlock_queue is not _UNSET:
+            data["interlock_queue"] = list(interlock_queue or [])
         await store.async_save(data)
+
+
+def find_program_by_unique_id(unique_id: str):
+    """Resolve a live IrrigationProgram entity from PROGRAMS by unique_id."""
+    from .globals import PROGRAMS
+
+    for prog in PROGRAMS.values():
+        if getattr(prog, "_attr_unique_id", None) == unique_id:
+            return prog
+    return None
+
+
+async def async_restore_interlock_queue(hass: HomeAssistant) -> list:
+    """Rebuild QUEUEDPROGRAMS once from the persisted interlock order.
+
+    Safe to call from every program at startup — only the first call loads.
+    Supports N programs behind interlock after a reboot.
+    """
+    from .globals import QUEUEDPROGRAMS
+
+    domain = hass.data.setdefault(DOMAIN, {})
+    if domain.get("_interlock_queue_restored"):
+        return list(QUEUEDPROGRAMS)
+    domain["_interlock_queue_restored"] = True
+
+    async with checkpoint_lock(hass):
+        store = checkpoint_store(hass)
+        data = await store.async_load() or {}
+        queue_ids = list(data.get("interlock_queue") or [])
+
+    rebuilt = []
+    for uid in queue_ids:
+        prog = find_program_by_unique_id(uid)
+        if prog is not None:
+            rebuilt.append(prog)
+        else:
+            _LOGGER.warning(
+                "Interlock queue references missing program unique_id=%s; skipping",
+                uid,
+            )
+
+    QUEUEDPROGRAMS.clear()
+    QUEUEDPROGRAMS.extend(rebuilt)
+    if rebuilt:
+        _LOGGER.info(
+            "Restored interlock queue (%d programs): %s",
+            len(rebuilt),
+            ", ".join(getattr(p, "name", str(p)) for p in rebuilt),
+        )
+    return list(QUEUEDPROGRAMS)
+
+
+def current_interlock_queue_ids() -> list[str]:
+    """Unique ids of programs currently in QUEUEDPROGRAMS."""
+    from .globals import QUEUEDPROGRAMS
+
+    return [
+        p._attr_unique_id  # noqa: SLF001
+        for p in QUEUEDPROGRAMS
+        if getattr(p, "_attr_unique_id", None)
+    ]

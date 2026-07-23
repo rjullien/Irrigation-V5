@@ -170,3 +170,21 @@ async def test_zone_set_resume_state():
     assert zone._status == CONST_PENDING
     zone.status_sensor_set.assert_awaited()
     zone.remaining_time_set.assert_awaited()
+
+
+def test_current_interlock_queue_ids_multi_program():
+    from custom_components.irrigationprogram.globals import QUEUEDPROGRAMS
+    from custom_components.irrigationprogram.runtime_checkpoint import (
+        current_interlock_queue_ids,
+    )
+
+    QUEUEDPROGRAMS.clear()
+    a = MagicMock()
+    a._attr_unique_id = "prog-a"
+    b = MagicMock()
+    b._attr_unique_id = "prog-b"
+    QUEUEDPROGRAMS.extend([a, b])
+    try:
+        assert current_interlock_queue_ids() == ["prog-a", "prog-b"]
+    finally:
+        QUEUEDPROGRAMS.clear()

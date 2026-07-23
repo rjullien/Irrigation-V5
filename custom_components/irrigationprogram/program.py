@@ -48,9 +48,11 @@ from .globals import PROGRAMS, QUEUEDPROGRAMS
 from .pump import PumpClass
 from .runtime_checkpoint import (
     apply_downtime,
-    build_checkpoint,
+    async_restore_interlock_queue,
     async_update_program_checkpoint,
+    build_checkpoint,
     checkpoint_store,
+    current_interlock_queue_ids,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -606,7 +608,10 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         )
 
         await async_update_program_checkpoint(
-            self._hass, self._attr_unique_id, payload
+            self._hass,
+            self._attr_unique_id,
+            payload,
+            interlock_queue=current_interlock_queue_ids(),
         )
 
         # Keep in-memory copy for zone startup checks on next boot path
@@ -623,14 +628,25 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
     async def async_clear_checkpoint(self) -> None:
         """Remove persisted mid-cycle state after a clean finish/stop."""
-        await async_update_program_checkpoint(self._hass, self._attr_unique_id, None)
+        await async_update_program_checkpoint(
+            self._hass,
+            self._attr_unique_id,
+            None,
+            interlock_queue=current_interlock_queue_ids(),
+        )
         entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
         if entry is not None:
             entry[ATTR_RUNTIME_CHECKPOINT] = None
         self._resume_overrides = {}
 
     async def async_resume_from_checkpoint(self) -> bool:
-        """Resume a cycle interrupted by HA restart. Returns True if resumed."""
+        """Resume a cycle interrupted by HA restart. Returns True if resumed.
+
+        Multi-program safe: restores the interlock queue from Store, then only
+        the head of the queue (or any program when interlock is off) starts
+        watering immediately. Programs behind the head resume paused and wait
+        to be unpaused when the previous program finishes.
+        """
         entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id, {})
         raw = entry.get(ATTR_RUNTIME_CHECKPOINT)
         if not raw:
@@ -643,6 +659,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         )
         if not adjusted:
             await self.async_clear_checkpoint()
+            # Still restore queue membership for programs without a watering
+            # checkpoint (should not happen often).
+            await async_restore_interlock_queue(self._hass)
             return False
 
         if self._state or not self._finished:
@@ -655,21 +674,42 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         remaining_items = list(adjusted.get("remaining") or [])
         if not running_items and not remaining_items:
             await self.async_clear_checkpoint()
+            await async_restore_interlock_queue(self._hass)
             return False
 
+        # Rebuild interlock order before deciding whether we may water now
+        await async_restore_interlock_queue(self._hass)
+        if self not in QUEUEDPROGRAMS and self.interlock:
+            # We were mid-cycle; ensure we appear in the live queue
+            QUEUEDPROGRAMS.append(self)
+            keep_payload = entry.get(ATTR_RUNTIME_CHECKPOINT) or adjusted
+            await async_update_program_checkpoint(
+                self._hass,
+                self._attr_unique_id,
+                keep_payload,
+                interlock_queue=current_interlock_queue_ids(),
+            )
+
+        must_wait = bool(
+            self.interlock
+            and QUEUEDPROGRAMS
+            and QUEUEDPROGRAMS[0] is not self
+        )
+
         _LOGGER.info(
-            "Resuming irrigation %s after reboot (downtime=%ss, running=%d, queued=%d)",
+            "Resuming irrigation %s after reboot (downtime=%ss, running=%d, queued=%d, wait_interlock=%s)",
             self._name,
             adjusted.get("downtime_s", 0),
             len(running_items),
             len(remaining_items),
+            must_wait,
         )
 
         self._stop = False
         self._state = True
         self._finished = False
         self._scheduled = bool(adjusted.get("scheduled", False))
-        self._paused = bool(adjusted.get("paused", False))
+        self._paused = must_wait or bool(adjusted.get("paused", False))
         start_raw = adjusted.get("start_time")
         if start_raw:
             parsed = dt_util.parse_datetime(start_raw)
@@ -712,12 +752,19 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             self._finished = True
             return False
 
+        if must_wait:
+            await self.pause_switch.async_turn_on()
+        else:
+            await self.pause_switch.async_turn_off()
+
         self.async_schedule_update_ha_state()
 
         async def _resume_runner(_now=None):
             # Same control loop as async_turn_on after build_run_script.
             # zone_turn_on → async_turn_on_from_program with remaining_override;
             # async_solenoid_turn_on() on an already-open Tuya valve is idempotent.
+            # If must_wait, run_monitor_zones spins on _paused until unpaused
+            # by the previous program's async_turn_off (interlock hand-off).
             try:
                 await self.run_monitor_zones()
                 while self._program_remaining > 0 and not self._stop:
