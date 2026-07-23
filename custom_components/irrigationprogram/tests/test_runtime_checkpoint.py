@@ -313,6 +313,92 @@ async def test_ha_stopping_turn_off_keeps_valves_and_checkpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resume_preserves_user_pause(monkeypatch):
+    """User-paused mid-cycle must stay paused after reboot resume (N1)."""
+    from custom_components.irrigationprogram.const import (
+        ATTR_RUNTIME_CHECKPOINT,
+        DOMAIN,
+    )
+    from custom_components.irrigationprogram.globals import QUEUEDPROGRAMS
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    now = dt_util.utcnow()
+    cp = build_checkpoint(
+        program_unique_id="uid",
+        program_name="Arrosage",
+        scheduled=True,
+        start_time=now,
+        paused=True,  # user had paused before reboot
+        running=[{"solenoid": "valve.z1", "remaining_s": 300}],
+        remaining=[],
+    )
+    cp["checkpoint_ts"] = now.isoformat()
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.loop = MagicMock()
+    hass.loop.time = MagicMock(return_value=100.0)
+    hass.data = {
+        DOMAIN: {
+            "uid": {ATTR_RUNTIME_CHECKPOINT: cp},
+            "_interlock_queue_restored": True,
+        }
+    }
+    hass.bus = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    pause = MagicMock()
+    pause.async_turn_on = AsyncMock()
+    pause.async_turn_off = AsyncMock()
+    program_data = MagicMock()
+    program_data.name = "Arrosage"
+    program_data.low_power = False
+    program_data.interlock = False  # not waiting on queue
+    program_data.pause = pause
+    program_data.pump = None
+    program_data.parallel = 1
+
+    zone_switch = MagicMock()
+    zone_switch.async_set_resume_state = AsyncMock()
+    zone_data = MagicMock()
+    zone_data.zone = "valve.z1"
+    zone_data.switch = zone_switch
+    zone_data.remaining_time = MagicMock(numeric_value=300)
+    zone_data.default_run_time = MagicMock(numeric_value=300)
+    zone_data.status = MagicMock(state="pending")
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = [zone_data]
+
+    QUEUEDPROGRAMS.clear()
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.arrosage",
+        )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_restore_interlock_queue",
+            AsyncMock(return_value=[]),
+        )
+        prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
+        prog.hass = hass
+        prog.async_schedule_update_ha_state = MagicMock()
+        # degree_of_parallel reads program.parallel
+        program_data.inter_zone_delay = None
+
+        ok = await prog.async_resume_from_checkpoint()
+
+    try:
+        assert ok is True
+        assert prog._paused is True
+        pause.async_turn_on.assert_awaited()
+        pause.async_turn_off.assert_not_awaited()
+    finally:
+        QUEUEDPROGRAMS.clear()
+
+
+@pytest.mark.asyncio
 async def test_time_respects_remaining_override(monkeypatch):
     """Resume path waters only remaining_override seconds."""
     zone = await _make_minimal_zone(monkeypatch)

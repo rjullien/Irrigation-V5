@@ -47,9 +47,10 @@ Le Store est partagé et protégé par un `asyncio.Lock`.
 - `runtime_checkpoint.py` — Store, lock, `apply_downtime`, restore queue
 - `program.py` — save / clear / resume multi-programmes
 - `zone.py` — skip startup off + `async_set_resume_state`
-- `__init__.py` — load checkpoint before platforms
+- `__init__.py` — load checkpoint + **precompute** `apply_downtime` once per entry (shared by all zones)
 
 ## Limites (v1)
 
-- Mode volume / eco : un segment temps (`remaining_override`).
-- Flush `homeassistant_stop` fire-and-forget (baseline = checkpoint ~10 s).
+- Mode volume / eco : un segment temps (`remaining_override`) — **warning log** si wait/repeat restants droppés.
+- Flush `homeassistant_stop` fire-and-forget (baseline = checkpoint ~10 s) ; flush toujours la `interlock_queue` même sans zones.
+- Au stop : pas d’unpause du programme suivant (file restaurée au boot).

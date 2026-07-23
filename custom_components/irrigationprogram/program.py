@@ -771,7 +771,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             self._finished = True
             return False
 
-        if must_wait:
+        if must_wait or self._paused:
+            # Keep pause ON for interlock waiters OR user-paused mid-cycle
+            # (turning pause OFF would fire pause_program and clear _paused).
             await self.pause_switch.async_turn_on()
         else:
             await self.pause_switch.async_turn_off()
