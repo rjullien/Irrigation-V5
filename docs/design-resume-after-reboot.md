@@ -38,9 +38,10 @@ Le Store est partagé et protégé par un `asyncio.Lock`.
 ## Downtime
 
 1. **Stale guard** : si `downtime > Σ(remaining au checkpoint) + 300s` → discard.
-2. **Running** : remaining − downtime (ordre).
-3. **Séquentiel (parallel=1)** : surplus de downtime → file (raccourcie / sautée).
-4. **Parallèle** : file inchangée.
+2. **Séquentiel (parallel=1)** : downtime consommé zone par zone (running puis file).
+3. **Parallèle** : chaque zone *running* perd le downtime **indépendamment** ; file inchangée.
+4. **Reconcile T0→T1** : au boot le skip-off utilise un snapshot T0 ; au resume, fermer toute valve encore dans `raw.running` mais plus dans `adjusted.running` (sinon fuite).
+5. **Resume échoué + interlock** : retirer self de `QUEUEDPROGRAMS` et unpause le head suivant (évite deadlock).
 
 ## Fichiers
 

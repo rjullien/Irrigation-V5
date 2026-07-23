@@ -559,6 +559,65 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
                 return zone
         return None
 
+    async def async_reconcile_solenoids(
+        self,
+        raw: dict | None,
+        adjusted: dict | None,
+    ) -> None:
+        """Close solenoids that must not stay open after resume accounting.
+
+        Boot may have skipped solenoid_turn_off using a T0 downtime snapshot.
+        Resume recomputes at T1 — close any valve that was running in ``raw``
+        but is no longer in ``adjusted['running']`` (finished during the gap,
+        or resume discarded entirely).
+        """
+        keep: set[str] = set()
+        if adjusted:
+            for item in adjusted.get("running") or []:
+                sol = item.get("solenoid")
+                if sol and int(item.get("remaining_s", 0)) > 0:
+                    keep.add(sol)
+
+        raw_running = {
+            item.get("solenoid")
+            for item in (raw or {}).get("running") or []
+            if item.get("solenoid")
+        }
+        # If resume is discarded, close every previously-running solenoid.
+        to_close = raw_running if adjusted is None else (raw_running - keep)
+        for solenoid in to_close:
+            zone = self._find_zone_by_solenoid(solenoid)
+            if zone and zone.switch:
+                _LOGGER.info(
+                    "Reconciling solenoid %s closed after resume (no longer active)",
+                    solenoid,
+                )
+                await zone.switch.async_solenoid_turn_off()
+
+    async def async_hand_off_interlock_after_failed_resume(self) -> None:
+        """Remove self from interlock queue and wake the next program."""
+        await async_restore_interlock_queue(self._hass)
+        # Entity.__eq__ is unreliable — always compare by identity.
+        if not any(p is self for p in QUEUEDPROGRAMS):
+            return
+        QUEUEDPROGRAMS[:] = [p for p in QUEUEDPROGRAMS if p is not self]
+        await async_update_program_checkpoint(
+            self._hass,
+            self._attr_unique_id,
+            None,
+            interlock_queue=current_interlock_queue_ids(),
+        )
+        entry = self._hass.data.get(DOMAIN, {}).get(self._attr_unique_id)
+        if entry is not None:
+            entry[ATTR_RUNTIME_CHECKPOINT] = None
+        if QUEUEDPROGRAMS:
+            _LOGGER.info(
+                "Resume failed for %s; unpausing next interlock program %s",
+                self._name,
+                QUEUEDPROGRAMS[0].name,
+            )
+            await QUEUEDPROGRAMS[0].pause_switch.async_turn_off()
+
     async def async_save_checkpoint(self, *, force: bool = False) -> None:
         """Persist mid-cycle state so a reboot can resume watering."""
         queue_ids = current_interlock_queue_ids()
@@ -587,12 +646,19 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         for zone in list(self._running_zones):
             if not zone.zone:
                 continue
-            running.append(
-                {
-                    "solenoid": zone.zone,
-                    "remaining_s": self._zone_remaining_seconds(zone),
-                }
-            )
+            rem = self._zone_remaining_seconds(zone)
+            if rem <= 0:
+                try:
+                    rem = max(0, int(zone.default_run_time.numeric_value or 0))
+                except Exception:  # noqa: BLE001
+                    rem = 0
+            if rem <= 0:
+                _LOGGER.warning(
+                    "Skip checkpoint running entry for %s: remaining_s=0",
+                    zone.zone,
+                )
+                continue
+            running.append({"solenoid": zone.zone, "remaining_s": rem})
         remaining = []
         for zone in list(self._remaining_zones):
             if not zone.zone:
@@ -603,6 +669,8 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
                     rem = max(0, int(zone.default_run_time.numeric_value or 0))
                 except Exception:  # noqa: BLE001
                     rem = 0
+            if rem <= 0:
+                continue
             remaining.append({"solenoid": zone.zone, "remaining_s": rem})
 
         if not running and not remaining:
@@ -673,14 +741,15 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             stored = await checkpoint_store(self._hass).async_load() or {}
             raw = (stored.get("programs") or {}).get(self._attr_unique_id)
         sequential = self.degree_of_parallel <= 1
+        # Single clock at resume time (T1) — boot skip used T0; reconcile closes
+        # any valve that finished between T0 and T1.
         adjusted = (
             apply_downtime(raw, sequential=sequential) if raw else None
         )
         if not adjusted:
+            await self.async_reconcile_solenoids(raw, None)
+            await self.async_hand_off_interlock_after_failed_resume()
             await self.async_clear_checkpoint()
-            # Still restore queue membership for programs without a watering
-            # checkpoint (should not happen often).
-            await async_restore_interlock_queue(self._hass)
             return False
 
         if self._state or not self._finished:
@@ -692,16 +761,21 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         running_items = list(adjusted.get("running") or [])
         remaining_items = list(adjusted.get("remaining") or [])
         if not running_items and not remaining_items:
+            await self.async_reconcile_solenoids(raw, None)
+            await self.async_hand_off_interlock_after_failed_resume()
             await self.async_clear_checkpoint()
-            await async_restore_interlock_queue(self._hass)
             return False
+
+        # Close valves that boot kept open but T1 says are done
+        await self.async_reconcile_solenoids(raw, adjusted)
 
         # Rebuild interlock order before deciding whether we may water now
         await async_restore_interlock_queue(self._hass)
-        if self not in QUEUEDPROGRAMS and self.interlock:
+        if self.interlock and not any(p is self for p in QUEUEDPROGRAMS):
             # We were mid-cycle; ensure we appear in the live queue
             QUEUEDPROGRAMS.append(self)
-            keep_payload = entry.get(ATTR_RUNTIME_CHECKPOINT) or adjusted
+            # Never persist ``adjusted`` (already downtime-reduced) — keep raw
+            keep_payload = entry.get(ATTR_RUNTIME_CHECKPOINT) or raw
             await async_update_program_checkpoint(
                 self._hass,
                 self._attr_unique_id,
@@ -766,6 +840,8 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             self._resume_overrides[zone.zone] = rem
 
         if not self._remaining_zones:
+            await self.async_reconcile_solenoids(raw, None)
+            await self.async_hand_off_interlock_after_failed_resume()
             await self.async_clear_checkpoint()
             self._state = False
             self._finished = True

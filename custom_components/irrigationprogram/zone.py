@@ -1371,9 +1371,17 @@ class Zone(SwitchEntity, RestoreEntity):
                 break
             # track the watering
 
-            if self.watering_type == "volume":
+            if self.watering_type == "volume" and remaining_override is None:
                 volume_delivered = await self.volume(water_adjust_value, reps, last)
             else:
+                # Resume always uses a time segment (remaining_s from checkpoint).
+                if self.watering_type == "volume" and remaining_override is not None:
+                    _LOGGER.warning(
+                        "Zone %s: resume uses time segment (%ss) instead of volume "
+                        "for remaining_override",
+                        self._name,
+                        remaining_override,
+                    )
                 seconds_run = await self.time(
                     water_adjust_value, seconds_run, reps, last
                 )

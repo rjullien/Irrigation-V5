@@ -73,6 +73,23 @@ def test_apply_downtime_parallel_does_not_spill_into_queue():
     assert adjusted["remaining"][0]["remaining_s"] == 600
 
 
+def test_apply_downtime_parallel_subtracts_independently():
+    """Each parallel running zone loses the full downtime (not serial leftover)."""
+    cp, now = _cp(
+        running=[
+            {"solenoid": "valve.z1", "remaining_s": 600},
+            {"solenoid": "valve.z2", "remaining_s": 600},
+        ],
+        remaining=[],
+        age_s=90,
+    )
+    adjusted = apply_downtime(cp, now=now, sequential=False)
+    assert adjusted is not None
+    assert len(adjusted["running"]) == 2
+    assert adjusted["running"][0]["remaining_s"] == 510
+    assert adjusted["running"][1]["remaining_s"] == 510
+
+
 def test_apply_downtime_rejects_stale_checkpoint():
     # total remaining 100s, grace 300 → stale if age > 400
     cp, now = _cp(
@@ -360,6 +377,7 @@ async def test_resume_preserves_user_pause(monkeypatch):
 
     zone_switch = MagicMock()
     zone_switch.async_set_resume_state = AsyncMock()
+    zone_switch.async_solenoid_turn_off = AsyncMock()
     zone_data = MagicMock()
     zone_data.zone = "valve.z1"
     zone_data.switch = zone_switch
@@ -394,6 +412,120 @@ async def test_resume_preserves_user_pause(monkeypatch):
         assert prog._paused is True
         pause.async_turn_on.assert_awaited()
         pause.async_turn_off.assert_not_awaited()
+    finally:
+        QUEUEDPROGRAMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_closes_orphan_solenoid(monkeypatch):
+    """Valve kept open at T0 but finished by T1 must be closed at resume."""
+    from custom_components.irrigationprogram.const import DOMAIN
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.data = {DOMAIN: {"uid": {}}}
+    hass.bus = MagicMock()
+
+    program_data = MagicMock()
+    program_data.name = "Arrosage"
+    program_data.low_power = False
+    program_data.interlock = False
+    program_data.pause = MagicMock()
+    program_data.pump = None
+
+    z1 = MagicMock()
+    z1.zone = "valve.z1"
+    z1.switch = MagicMock()
+    z1.switch.async_solenoid_turn_off = AsyncMock()
+    z2 = MagicMock()
+    z2.zone = "valve.z2"
+    z2.switch = MagicMock()
+    z2.switch.async_solenoid_turn_off = AsyncMock()
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = [z1, z2]
+
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.arrosage",
+        )
+        prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
+
+    raw = {
+        "running": [
+            {"solenoid": "valve.z1", "remaining_s": 10},
+            {"solenoid": "valve.z2", "remaining_s": 100},
+        ]
+    }
+    adjusted = {
+        "running": [{"solenoid": "valve.z2", "remaining_s": 40}],
+        "remaining": [],
+    }
+    await prog.async_reconcile_solenoids(raw, adjusted)
+    z1.switch.async_solenoid_turn_off.assert_awaited_once()
+    z2.switch.async_solenoid_turn_off.assert_not_awaited()
+
+    await prog.async_reconcile_solenoids(raw, None)
+    assert z1.switch.async_solenoid_turn_off.await_count >= 2
+    z2.switch.async_solenoid_turn_off.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_hands_off_interlock(monkeypatch):
+    """Discarded head checkpoint must unpause the next queued program."""
+    from custom_components.irrigationprogram.const import DOMAIN
+    from custom_components.irrigationprogram.globals import QUEUEDPROGRAMS
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.data = {DOMAIN: {"uid-a": {}, "uid-b": {}}}
+    hass.bus = MagicMock()
+
+    program_data = MagicMock()
+    program_data.name = "A"
+    program_data.low_power = False
+    program_data.interlock = True
+    program_data.pause = MagicMock()
+    program_data.pause.async_turn_off = AsyncMock()
+    program_data.pump = None
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = []
+
+    next_prog = MagicMock()
+    next_prog.name = "B"
+    next_prog._attr_unique_id = "uid-b"
+    next_prog.pause_switch = MagicMock()
+    next_prog.pause_switch.async_turn_off = AsyncMock()
+
+    QUEUEDPROGRAMS.clear()
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.a",
+        )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_update_program_checkpoint",
+            AsyncMock(),
+        )
+        prog = IrrigationProgram(hass, "uid-a", "a", runtime)
+        QUEUEDPROGRAMS.extend([prog, next_prog])
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_restore_interlock_queue",
+            AsyncMock(return_value=list(QUEUEDPROGRAMS)),
+        )
+        await prog.async_hand_off_interlock_after_failed_resume()
+
+    try:
+        # Entity.__eq__ is unreliable — assert by identity.
+        assert not any(p is prog for p in QUEUEDPROGRAMS)
+        assert QUEUEDPROGRAMS == [next_prog]
+        next_prog.pause_switch.async_turn_off.assert_awaited_once()
     finally:
         QUEUEDPROGRAMS.clear()
 

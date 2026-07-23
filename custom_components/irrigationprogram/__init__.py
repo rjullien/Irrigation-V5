@@ -331,7 +331,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         stored = await checkpoint_store(hass).async_load() or {}
         programs_cp = stored.get("programs") or {}
         entry_cp = programs_cp.get(entry.entry_id)
-        entry_adjusted = apply_downtime(entry_cp) if entry_cp else None
+        sequential = int(config.get(ATTR_PARALLEL, 1) or 1) <= 1
+        entry_adjusted = (
+            apply_downtime(entry_cp, sequential=sequential) if entry_cp else None
+        )
 
         # store an object for your platforms to access
         hass.data[DOMAIN][entry.entry_id] = {

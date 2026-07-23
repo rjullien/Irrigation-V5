@@ -97,7 +97,8 @@ def apply_downtime(
     solenoid stays open in hardware — queued valves stay closed — so this is
     a schedule-correctness choice, not a perfect water-volume reconstruction.
 
-    Parallel programs: only running zones are reduced; queued keep full remaining.
+    Parallel programs: each running zone loses the full downtime independently;
+    queued zones keep full remaining (they never started in hardware).
     """
     if not checkpoint or checkpoint.get("version") != STORAGE_VERSION:
         return None
@@ -130,18 +131,34 @@ def apply_downtime(
 
     leftover = delta
     running_out: list[dict[str, Any]] = []
-    for item in running_src:
-        rem = max(0, int(item.get("remaining_s", 0)))
-        if rem > leftover:
-            running_out.append({**item, "remaining_s": rem - leftover})
-            leftover = 0
-        else:
-            leftover -= rem
-            _LOGGER.info(
-                "Zone %s finished during HA downtime (%ss of its remaining consumed)",
-                item.get("solenoid"),
-                rem,
-            )
+    if sequential:
+        # Consume downtime across running zones in order, then spill to queue.
+        for item in running_src:
+            rem = max(0, int(item.get("remaining_s", 0)))
+            if rem > leftover:
+                running_out.append({**item, "remaining_s": rem - leftover})
+                leftover = 0
+            else:
+                leftover -= rem
+                _LOGGER.info(
+                    "Zone %s finished during HA downtime (%ss of its remaining consumed)",
+                    item.get("solenoid"),
+                    rem,
+                )
+    else:
+        # Parallel: each running zone loses the full downtime independently.
+        leftover = 0
+        for item in running_src:
+            rem = max(0, int(item.get("remaining_s", 0)))
+            new_rem = rem - delta
+            if new_rem > 0:
+                running_out.append({**item, "remaining_s": new_rem})
+            else:
+                _LOGGER.info(
+                    "Zone %s finished during HA downtime (parallel, had %ss remaining)",
+                    item.get("solenoid"),
+                    rem,
+                )
 
     remaining_out: list[dict[str, Any]] = []
     for item in remaining_src:

@@ -8,16 +8,23 @@ pytest_plugins = ["pytest_asyncio"]
 
 @pytest.fixture(autouse=True)
 def mock_globals():
-    """Mock global variables used by the component."""
-    from unittest.mock import patch
+    """Reset mutable globals in place (do not replace the list/dict objects).
 
-    with (
-        patch("custom_components.irrigationprogram.globals.ZONES", {}),
-        patch("custom_components.irrigationprogram.globals.PROGRAMS", {}),
-        patch("custom_components.irrigationprogram.globals.QUEUEDPROGRAMS", []),
-        patch("custom_components.irrigationprogram.globals.RUNNINGPROGRAM", False),
-    ):
-        yield
+    ``program.py`` binds ``from .globals import QUEUEDPROGRAMS`` at import time.
+    Replacing the module attribute with a new ``[]`` leaves that binding on the
+    old list and breaks interlock tests.
+    """
+    from custom_components.irrigationprogram import globals as g
+
+    g.ZONES.clear()
+    g.PROGRAMS.clear()
+    g.QUEUEDPROGRAMS.clear()
+    g.RUNNINGPROGRAM = False
+    yield
+    g.ZONES.clear()
+    g.PROGRAMS.clear()
+    g.QUEUEDPROGRAMS.clear()
+    g.RUNNINGPROGRAM = False
 
 
 @pytest.fixture
