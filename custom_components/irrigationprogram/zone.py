@@ -56,6 +56,7 @@ from .const import (
     CONST_RAINING_STOP,
     CONST_SWITCH,
     CONST_UNAVAILABLE,
+    CONST_UNKNOWN,
     CONST_VALVE,
     CONST_ZERO_FLOW_DELAY,
     CONST_ZONE_DISABLED,
@@ -457,17 +458,18 @@ class Zone(SwitchEntity, RestoreEntity):
 
     async def should_run_ex(self, scheduled=True):
         """Determine if the zone should run."""
-        # Stale-cache guard: status sensor may still say unavailable after the
-        # solenoid recovered (monitor historically ignored valve.*). Re-check
+        # Stale-cache guard: status sensor may still say unavailable/unknown after
+        # the solenoid recovered (monitor historically ignored valve.*). Re-check
         # live before skipping the zone — see docs/design-zone-status-valve-cache.md
         cached = self.status.state
-        if cached == CONST_UNAVAILABLE:
+        if cached in (CONST_UNAVAILABLE, CONST_UNKNOWN):
             live = await self.get_status()
-            if live == CONST_UNAVAILABLE:
+            if live in (CONST_UNAVAILABLE, CONST_UNKNOWN):
                 return False
             _LOGGER.info(
-                "Zone %s: status cache was unavailable but live status is %s; refreshing cache",
+                "Zone %s: status cache was %s but live status is %s; refreshing cache",
                 self._name,
+                cached,
                 live,
             )
             self._status = (
@@ -480,6 +482,7 @@ class Zone(SwitchEntity, RestoreEntity):
         if cached in [
             CONST_DISABLED,
             CONST_UNAVAILABLE,
+            CONST_UNKNOWN,
             CONST_ADJUSTED_OFF,
             CONST_NO_WATER_SOURCE,
             CONST_RAINING,

@@ -617,8 +617,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         for zone in self._zones:
             await monitor_append(zone.switch.entity_id, "zone", monitor)
             await monitor_append(zone.enabled.entity_id, "enabled", monitor)
-            # Solenoid/valve live state — refresh zone status cache when device
-            # recovers from unavailable (see docs/design-zone-status-valve-cache.md)
+            # zone.zone = IrrigationZoneData.zone (solenoid entity_id str),
+            # not Zone.zone — refresh status cache when the valve recovers.
+            # See docs/design-zone-status-valve-cache.md
             if zone.zone:
                 await monitor_append(zone.zone, "solenoid", monitor)
             if zone.frequency:
