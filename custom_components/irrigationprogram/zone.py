@@ -973,7 +973,11 @@ class Zone(SwitchEntity, RestoreEntity):
                 epoch = epoch.replace(hour=0, minute=0, second=0, microsecond=0)
                 today = dt_util.start_of_local_day()
                 days_since_epoch = (today - epoch).days
-                days_until_next = (frq - (days_since_epoch % frq)) % frq
+                # Before the cycle start, next run is the epoch itself
+                if days_since_epoch < 0:
+                    days_until_next = -days_since_epoch
+                else:
+                    days_until_next = (frq - (days_since_epoch % frq)) % frq
                 v_next_run = first_start_time + timedelta(days=days_until_next)
                 # If next_run is in the past (already ran today), advance one cycle
                 if v_next_run < dt_util.as_local(dt_util.now()) and days_until_next == 0:
