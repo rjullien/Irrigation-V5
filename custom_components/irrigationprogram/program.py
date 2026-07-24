@@ -48,7 +48,6 @@ from .globals import PROGRAMS, QUEUEDPROGRAMS
 from .pump import PumpClass
 from .runtime_checkpoint import (
     apply_downtime,
-    async_restore_interlock_queue,
     async_restore_interlock_queue_ready,
     async_update_program_checkpoint,
     build_checkpoint,
@@ -597,7 +596,9 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
     async def async_hand_off_interlock_after_failed_resume(self) -> None:
         """Remove self from interlock queue and wake the next program."""
-        await async_restore_interlock_queue(self._hass)
+        # Wait for siblings — same barrier as successful resume — so we do not
+        # persist an empty/partial queue when another program is still loading.
+        await async_restore_interlock_queue_ready(self._hass)
         # Entity.__eq__ is unreliable — always compare by identity.
         if not any(p is self for p in QUEUEDPROGRAMS):
             return
@@ -1268,7 +1269,13 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
             remaining = [zone.switch.default_run_time for zone in remaining_zones]
         else:
             remaining = [zone.remaining_time.numeric_value for zone in running_zones]
-            remaining += [zone.switch.default_run_time for zone in remaining_zones]
+            for zone in remaining_zones:
+                # During resume, queued zones already have a shortened remaining
+                # in ``_resume_overrides`` — do not inflate with full default_run_time.
+                if zone.zone and zone.zone in self._resume_overrides:
+                    remaining.append(max(0, int(self._resume_overrides[zone.zone])))
+                else:
+                    remaining.append(zone.switch.default_run_time)
 
         streams = []
         # create the streams
@@ -1352,6 +1359,11 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
         if self._state is False:
             await self._program.pause.async_turn_off()
+        elif self._state:
+            # Persist paused flag immediately — run_monitor_zones skips its
+            # periodic save while paused, so a crash before HA stop would
+            # otherwise resume with downtime incorrectly applied.
+            await self.async_save_checkpoint(force=True)
 
     async def zone_pending(self, zone) -> bool:
         """Determine if a another instance of the zone is pending."""

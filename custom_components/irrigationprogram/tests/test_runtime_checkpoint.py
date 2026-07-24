@@ -424,10 +424,6 @@ async def test_resume_preserves_user_pause(monkeypatch):
             lambda *a, **k: "switch.arrosage",
         )
         mp.setattr(
-            "custom_components.irrigationprogram.program.async_restore_interlock_queue",
-            AsyncMock(return_value=[]),
-        )
-        mp.setattr(
             "custom_components.irrigationprogram.program.async_restore_interlock_queue_ready",
             AsyncMock(return_value=[]),
         )
@@ -522,10 +518,6 @@ async def test_paused_resume_runner_does_not_turn_off(monkeypatch):
         mp.setattr(
             "custom_components.irrigationprogram.program.async_generate_entity_id",
             lambda *a, **k: "switch.arrosage",
-        )
-        mp.setattr(
-            "custom_components.irrigationprogram.program.async_restore_interlock_queue",
-            AsyncMock(return_value=[]),
         )
         mp.setattr(
             "custom_components.irrigationprogram.program.async_restore_interlock_queue_ready",
@@ -768,7 +760,7 @@ async def test_failed_resume_hands_off_interlock(monkeypatch):
         prog = IrrigationProgram(hass, "uid-a", "a", runtime)
         QUEUEDPROGRAMS.extend([prog, next_prog])
         mp.setattr(
-            "custom_components.irrigationprogram.program.async_restore_interlock_queue",
+            "custom_components.irrigationprogram.program.async_restore_interlock_queue_ready",
             AsyncMock(return_value=list(QUEUEDPROGRAMS)),
         )
         await prog.async_hand_off_interlock_after_failed_resume()
@@ -780,6 +772,102 @@ async def test_failed_resume_hands_off_interlock(monkeypatch):
         next_prog.pause_switch.async_turn_off.assert_awaited_once()
     finally:
         QUEUEDPROGRAMS.clear()
+
+
+@pytest.mark.asyncio
+async def test_calculate_remaining_uses_resume_overrides(monkeypatch):
+    """Queued resume zones must not inflate program remaining via default_run_time."""
+    from custom_components.irrigationprogram.const import DOMAIN
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.data = {DOMAIN: {"uid": {}}}
+    hass.bus = MagicMock()
+
+    program_data = MagicMock()
+    program_data.name = "Arrosage"
+    program_data.low_power = False
+    program_data.interlock = False
+    program_data.pause = MagicMock()
+    program_data.pump = None
+    program_data.parallel = 1
+    program_data.inter_zone_delay = 0
+
+    zone = MagicMock()
+    zone.zone = "valve.z1"
+    zone.switch = MagicMock()
+    zone.switch.default_run_time = 9999  # full config — must NOT win
+    zone.remaining_time = MagicMock(numeric_value=0)
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = [zone]
+
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.arrosage",
+        )
+        prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
+        prog.remaining_time_set = AsyncMock()
+        prog.async_schedule_update_ha_state = MagicMock()
+        prog._resume_overrides = {"valve.z1": 120}
+
+        total = await prog.calculate_program_remaining([], [zone], 0, False)
+
+    assert total == 120
+
+
+@pytest.mark.asyncio
+async def test_pause_program_force_saves_checkpoint(monkeypatch):
+    """Entering/leaving pause must flush checkpoint (paused flag)."""
+    from custom_components.irrigationprogram.const import DOMAIN
+    from custom_components.irrigationprogram.program import IrrigationProgram
+
+    hass = MagicMock()
+    hass.config.time_zone = "UTC"
+    hass.data = {DOMAIN: {"uid": {}}}
+    hass.bus = MagicMock()
+
+    pause = MagicMock()
+    pause.is_on = True
+    pause.async_turn_off = AsyncMock()
+    program_data = MagicMock()
+    program_data.name = "Arrosage"
+    program_data.low_power = False
+    program_data.interlock = False
+    program_data.pause = pause
+    program_data.pump = None
+
+    zone_switch = MagicMock()
+    zone_switch.async_toggle = AsyncMock()
+    zone = MagicMock()
+    zone.switch = zone_switch
+
+    runtime = MagicMock()
+    runtime.program = program_data
+    runtime.zone_data = [zone]
+
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            "custom_components.irrigationprogram.program.async_generate_entity_id",
+            lambda *a, **k: "switch.arrosage",
+        )
+        mp.setattr(
+            "custom_components.irrigationprogram.program.asyncio.sleep",
+            AsyncMock(),
+        )
+        prog = IrrigationProgram(hass, "uid", "arrosage", runtime)
+        prog._state = True
+        prog._zones = [zone]
+        prog.async_save_checkpoint = AsyncMock()
+
+        event = MagicMock()
+        await prog.pause_program(event)
+
+    assert prog._paused is True
+    prog.async_save_checkpoint.assert_awaited_once_with(force=True)
 
 
 @pytest.mark.asyncio
