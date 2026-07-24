@@ -1205,7 +1205,9 @@ class Zone(SwitchEntity, RestoreEntity):
         last_closed = False
         while datetime.now() < deadline:
             if self._status == CONST_PAUSED:
-                break
+                # Incomplete settle — leave commanded-open set so a later
+                # turn_off still forces close if a delayed open arrives.
+                return False
             await self.async_solenoid_turn_off()
             await asyncio.sleep(0.5)
             check_state, _value = await self.check_switch_state()
