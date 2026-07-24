@@ -89,9 +89,21 @@ def mock_config_entry():
     return entry
 
 
+@pytest.mark.asyncio
 async def test_async_setup_entry_basic(mock_hass, mock_config_entry):
     """Test basic async_setup_entry functionality."""
-    with patch("homeassistant.components.persistent_notification.async_create"):
+
+    class _Store:
+        async def async_load(self):
+            return {}
+
+    with (
+        patch("homeassistant.components.persistent_notification.async_create"),
+        patch(
+            "custom_components.irrigationprogram.checkpoint_store",
+            lambda _hass: _Store(),
+        ),
+    ):
         result = await async_setup_entry(mock_hass, mock_config_entry)
 
     assert result is True
@@ -110,13 +122,14 @@ async def test_async_setup_entry_basic(mock_hass, mock_config_entry):
     assert zones[0].zone == "switch.zone1"
 
 
+@pytest.mark.asyncio
 async def test_async_setup_entry_unavailable_zones_no_typeerror(
     mock_hass, mock_config_entry
 ):
     """Unavailable zones must not TypeError when building the warning message.
 
-    Regression for issue #171: msg was None then msg += "ERROR..." crashed
-    irrigationprogram setup when all Tuya valves were unavailable.
+    Regression for issue #171 + upstream PR #305: accumulate all warnings into
+    one notification (shared notification_id) instead of per-zone overwrite.
     """
     import asyncio
 
@@ -124,11 +137,19 @@ async def test_async_setup_entry_unavailable_zones_no_typeerror(
     unavailable.state = "unavailable"
     mock_hass.states.get = MagicMock(return_value=unavailable)
 
+    class _Store:
+        async def async_load(self):
+            return {}
+
     with (
         patch("custom_components.irrigationprogram.async_create") as mock_notify,
         patch(
             "custom_components.irrigationprogram.asyncio.wait_for",
             side_effect=asyncio.TimeoutError,
+        ),
+        patch(
+            "custom_components.irrigationprogram.checkpoint_store",
+            lambda _hass: _Store(),
         ),
     ):
         result = await async_setup_entry(mock_hass, mock_config_entry)
@@ -142,7 +163,109 @@ async def test_async_setup_entry_unavailable_zones_no_typeerror(
     assert "has not initialised" in message
 
 
-async def test_irrigation_program_initialization(mock_config_entry):
+@pytest.mark.asyncio
+async def test_deferred_partial_setup_survives_missing_zone_entities(
+    mock_hass, mock_config_entry
+):
+    """Partial setup must complete when zone entities are genuinely missing.
+
+    Upstream PR #305: every missing zone reported in a single aggregated
+    notification (shared notification_id).
+    """
+    import asyncio
+
+    zone2 = dict(mock_config_entry.options[ATTR_ZONES][0])
+    zone2[ATTR_ZONE] = "switch.zone2"
+    mock_config_entry.options = {
+        **mock_config_entry.options,
+        ATTR_ZONES: [mock_config_entry.options[ATTR_ZONES][0], zone2],
+    }
+    mock_hass.is_running = False
+    mock_hass.states.get.return_value = None
+    captured = {}
+    mock_hass.bus.async_listen_once = MagicMock(
+        side_effect=lambda event, cb: captured.__setitem__("cb", cb)
+    )
+
+    class _Store:
+        async def async_load(self):
+            return {}
+
+    assert await async_setup_entry(mock_hass, mock_config_entry) is True
+
+    with (
+        patch(
+            "custom_components.irrigationprogram.asyncio.wait_for",
+            side_effect=asyncio.TimeoutError,
+        ),
+        patch("custom_components.irrigationprogram.async_create") as notify,
+        patch(
+            "custom_components.irrigationprogram.checkpoint_store",
+            lambda _hass: _Store(),
+        ),
+    ):
+        await captured["cb"](MagicMock())
+
+    assert mock_config_entry.runtime_data is not None
+    mock_hass.config_entries.async_forward_entry_setups.assert_awaited()
+    notify.assert_called_once()
+    message = notify.call_args.kwargs["message"]
+    assert "switch.zone1" in message
+    assert "switch.zone2" in message
+
+
+@pytest.mark.asyncio
+async def test_deferred_partial_setup_survives_missing_zone_sensors(
+    mock_hass, mock_config_entry
+):
+    """Partial setup must warn (not crash) when only zone sensors are missing."""
+    import asyncio
+
+    zone = dict(mock_config_entry.options[ATTR_ZONES][0])
+    zone[ATTR_RAIN_SENSOR] = "sensor.rain1"
+    zone[ATTR_WATER_ADJUST] = "sensor.adjust1"
+    mock_config_entry.options = {
+        **mock_config_entry.options,
+        ATTR_ZONES: [zone],
+    }
+    mock_hass.is_running = False
+    zone_state = MagicMock()
+    zone_state.state = "off"
+    mock_hass.states.get.side_effect = (
+        lambda entity_id: zone_state if entity_id == "switch.zone1" else None
+    )
+    captured = {}
+    mock_hass.bus.async_listen_once = MagicMock(
+        side_effect=lambda event, cb: captured.__setitem__("cb", cb)
+    )
+
+    class _Store:
+        async def async_load(self):
+            return {}
+
+    assert await async_setup_entry(mock_hass, mock_config_entry) is True
+
+    with (
+        patch(
+            "custom_components.irrigationprogram.asyncio.wait_for",
+            side_effect=asyncio.TimeoutError,
+        ),
+        patch("custom_components.irrigationprogram.async_create") as notify,
+        patch(
+            "custom_components.irrigationprogram.checkpoint_store",
+            lambda _hass: _Store(),
+        ),
+    ):
+        await captured["cb"](MagicMock())
+
+    assert mock_config_entry.runtime_data is not None
+    notify.assert_called_once()
+    message = notify.call_args.kwargs["message"]
+    assert "sensor.adjust1" in message
+    assert "sensor.rain1" in message
+
+
+def test_irrigation_program_initialization(mock_config_entry):
     """Test IrrigationProgram dataclass initialization."""
     config = {
         ATTR_DEVICE_TYPE: "Generic",
@@ -216,7 +339,7 @@ async def test_irrigation_program_initialization(mock_config_entry):
     assert program.water_source == "sensor.water1"
 
 
-async def test_irrigation_zone_data_initialization():
+def test_irrigation_zone_data_initialization():
     """Test IrrigationZoneData dataclass initialization."""
     zone_data = IrrigationZoneData(
         zone="switch.zone1",
@@ -253,7 +376,7 @@ async def test_irrigation_zone_data_initialization():
     assert zone_data.adjustment == "sensor.adjust1"
 
 
-async def test_irrigation_data_structure(mock_config_entry):
+def test_irrigation_data_structure(mock_config_entry):
     """Test IrrigationData structure."""
     program = IrrigationProgram(
         name="Test Program",
