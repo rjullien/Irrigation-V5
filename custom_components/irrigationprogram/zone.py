@@ -107,6 +107,12 @@ class Zone(SwitchEntity, RestoreEntity):
         self._remaining_time = 0
         self._remaining_override = None
         self._resume_segment_s = None
+        # True after we issued open/turn_on until we confirm closed. Slow
+        # controllers (e.g. Tuya) can report closed while an open is still
+        # in flight — skipping close then lets delayed opens stack across zones.
+        self._solenoid_commanded_open = False
+        # True once HA observed the solenoid open/on after a command.
+        self._solenoid_open_confirmed = False
         self._default_run_time = 0
         self._state = CONST_OFF  # switch state
         self._status:str = CONST_OFF  # zone run status
@@ -590,6 +596,7 @@ class Zone(SwitchEntity, RestoreEntity):
                 # if not the expected state loop again
                 await self.async_solenoid_turn_on()
                 continue
+            self._solenoid_open_confirmed = True
             break
         else:
             async_dismiss(self.hass, "irrigation_latency")
@@ -1096,6 +1103,7 @@ class Zone(SwitchEntity, RestoreEntity):
                         RAINBIRD_DURATION: duration,
                     },
                 )
+                self._solenoid_commanded_open = True
             elif self.controller_type == BHYVE:
                 # B-Hyve controller requires a different service call
                 duration = await self.calc_run_time(
@@ -1112,6 +1120,7 @@ class Zone(SwitchEntity, RestoreEntity):
                         BHYVE_DURATION: duration,
                     },
                 )
+                self._solenoid_commanded_open = True
             elif self.entity_type == CONST_VALVE:
                 # valve
                 await self.hass.services.async_call(
@@ -1122,6 +1131,10 @@ class Zone(SwitchEntity, RestoreEntity):
                 await self.hass.services.async_call(
                     CONST_SWITCH, SERVICE_TURN_ON, {ATTR_ENTITY_ID: self.solenoid}
                 )
+
+            # Mark open commanded even before HA state reflects it — required so
+            # async_solenoid_turn_off still sends close on laggy controllers.
+            self._solenoid_commanded_open = True
 
             event_data = {
                 "action": "zone_turned_on",
@@ -1138,9 +1151,11 @@ class Zone(SwitchEntity, RestoreEntity):
 
     async def async_solenoid_turn_off(self):
         """Turn off the device."""
-        #if already off do nothing
+        # If already off do nothing — UNLESS we commanded open and never saw it.
+        # Laggy controllers (Tuya) can still apply a pending open after we abort;
+        # skipping close leaves that open unopposed and the next zones stack.
         check_state, _value = await self.check_switch_state()
-        if check_state is False:
+        if check_state is False and not self._solenoid_commanded_open:
             return
 
         # is it a valve or a switch
@@ -1167,12 +1182,79 @@ class Zone(SwitchEntity, RestoreEntity):
         }
         self.hass.bus.async_fire("irrigation_event", event_data)
 
+    def _solenoid_settle_seconds(self) -> int:
+        """How long to watch for delayed opens after an unconfirmed open."""
+        # Incident 2026-07-24: Tuya applied opens 12–25s late while latency=5
+        # caused an abort/skip cascade. Watch at least ~30s when open was never
+        # confirmed — normal confirmed cycles keep the short latency wait.
+        return max(int(self._latency or 0) * 4, 30)
+
+    async def async_ensure_solenoid_closed(self) -> bool:
+        """Close and watch for delayed opens after an unconfirmed open command.
+
+        Returns True when the solenoid appears closed at the end of the settle
+        window.
+        """
+        settle_s = self._solenoid_settle_seconds()
+        _LOGGER.info(
+            "Zone %s: settling solenoid closed for %ss after unconfirmed open",
+            self._name,
+            settle_s,
+        )
+        deadline = datetime.now() + timedelta(seconds=settle_s)
+        last_closed = False
+        while datetime.now() < deadline:
+            if self._status == CONST_PAUSED:
+                break
+            await self.async_solenoid_turn_off()
+            await asyncio.sleep(0.5)
+            check_state, _value = await self.check_switch_state()
+            if check_state is False:
+                last_closed = True
+                # Keep watching — a delayed open may still arrive.
+                continue
+            last_closed = False
+            _LOGGER.warning(
+                "Zone %s: solenoid re-opened during settle; re-closing",
+                self._name,
+            )
+
+        if last_closed:
+            self._solenoid_commanded_open = False
+            self._solenoid_open_confirmed = False
+            return True
+
+        async_dismiss(self.hass, "irrigation_latency")
+        async_create(
+            self.hass,
+            message=(
+                f"Cannot confirm {self.name} closed after open command "
+                f"(waited {settle_s}s). Check the valve manually."
+            ),
+            title="Irrigation Controller",
+            notification_id="irrigation_latency",
+        )
+        event_data = {
+            "action": "error",
+            "error": "Switch can not be confirmed as OFF after open command",
+            "device_id": self.entity_id,
+            "scheduled": self._scheduled,
+            "program": self.name,
+        }
+        self.hass.bus.async_fire("irrigation_event", event_data)
+        # Leave flag set so a later turn_off still forces close.
+        return False
 
     async def async_eco_turn_off(self):
         """Signal the zone to stop."""
         self._status_sensor = self._status = CONST_ECO
-        await self.async_solenoid_turn_off()
-        await self.check_is_off()
+        if self._solenoid_commanded_open and not self._solenoid_open_confirmed:
+            await self.async_ensure_solenoid_closed()
+        else:
+            await self.async_solenoid_turn_off()
+            await self.check_is_off()
+            self._solenoid_commanded_open = False
+            self._solenoid_open_confirmed = False
         await self.status_sensor_set()
 
     async def async_toggle(self, **kwargs):
@@ -1204,8 +1286,15 @@ class Zone(SwitchEntity, RestoreEntity):
             self._extra_attrs[ATTR_HISTORICAL_FLOW] = self.flow_sensor
             self._hist_flow_rate = self.flow_sensor
 
-        await self.async_solenoid_turn_off()
-        await self.check_is_off()
+        if self._solenoid_commanded_open and not self._solenoid_open_confirmed:
+            # Open was sent but never confirmed — force close + settle so a
+            # delayed controller open cannot stack with the next zone.
+            await self.async_ensure_solenoid_closed()
+        else:
+            await self.async_solenoid_turn_off()
+            await self.check_is_off()
+            self._solenoid_commanded_open = False
+            self._solenoid_open_confirmed = False
         self._remaining_time = 0
         await self.remaining_time_set()
         await asyncio.sleep(0.1)
@@ -1348,6 +1437,8 @@ class Zone(SwitchEntity, RestoreEntity):
         self._stop = False
         self._aborted = False
         self._remaining_override = remaining_override
+        self._solenoid_commanded_open = False
+        self._solenoid_open_confirmed = False
 
         if self.ignore_sensors:
             water_adjust_value = 1
@@ -1543,6 +1634,7 @@ class Zone(SwitchEntity, RestoreEntity):
                     # if not on loop again
                     status = value
                     continue
+                self._solenoid_open_confirmed = True
                 break
             else:
                 if not warning_issued:
@@ -1640,6 +1732,7 @@ class Zone(SwitchEntity, RestoreEntity):
                     # if not on loop again
                     status = value
                     continue
+                self._solenoid_open_confirmed = True
                 break
             else:
                 if not warning_issued:
