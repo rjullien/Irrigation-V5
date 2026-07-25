@@ -176,6 +176,7 @@ class IrrigationProgram:
     water_source_pause: bool = False
     continue_on_unexpected_state: bool = False
     input_mode: str = "slider"  # slider|box
+    creneau: Any|SelectEntity = None  # rotation slot select (1er/2e/… jour du cycle)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

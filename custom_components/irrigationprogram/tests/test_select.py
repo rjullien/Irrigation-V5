@@ -14,7 +14,8 @@ from custom_components.irrigationprogram import (
     IrrigationProgram,
     IrrigationZoneData,
 )
-from custom_components.irrigationprogram.select import Frequency, async_setup_entry
+from custom_components.irrigationprogram.select import Creneau, Frequency, async_setup_entry
+from custom_components.irrigationprogram.rotation import creneau_to_start_date
 
 
 class MockHomeAssistant:
@@ -57,6 +58,7 @@ def mock_config_entry():
             frequency=None,
             freq_options=["1", "2", "3"],
             freq=False,
+            freq_start_date="",
             repeat=False,
             repeats=None,
             rain_behaviour="stop",
@@ -150,3 +152,39 @@ async def test_select_entity_functionality():
     with patch.object(freq, "async_write_ha_state"):
         await freq.async_select_option("7")
     assert freq.current_option == "7"
+
+
+async def test_setup_creates_creneau_when_program_freq(mock_hass, mock_config_entry):
+    mock_config_entry.runtime_data.program.freq = True
+    mock_config_entry.data = {}
+    mock_config_entry.options = {}
+    async_add_entities = AsyncMock()
+
+    await async_setup_entry(mock_hass, mock_config_entry, async_add_entities)
+
+    selects = async_add_entities.call_args[0][0]
+    types = {type(s) for s in selects}
+    assert Frequency in types
+    assert Creneau in types
+    assert mock_config_entry.runtime_data.program.creneau is not None
+
+
+async def test_creneau_select_updates_freq_start_date(mock_hass, mock_config_entry):
+    mock_config_entry.data = {"freq_start_date": ""}
+    mock_config_entry.options = {}
+    mock_config_entry.async_update_entry = MagicMock()
+    # hass.config_entries.async_update_entry is what Creneau calls
+    mock_hass.config_entries = MagicMock()
+    mock_hass.config_entries.async_update_entry = MagicMock()
+
+    program = mock_config_entry.runtime_data.program
+    program.freq_start_date = ""
+    creneau = Creneau(mock_hass, mock_config_entry, "test_entry_id", program)
+    creneau.hass = mock_hass
+
+    with patch.object(creneau, "async_write_ha_state"):
+        await creneau.async_select_option("2")
+
+    assert creneau.current_option == "2"
+    assert program.freq_start_date == creneau_to_start_date(2)
+    mock_hass.config_entries.async_update_entry.assert_called_once()
