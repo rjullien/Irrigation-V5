@@ -142,6 +142,9 @@
 		"select": {
 			"frequency": {
 				"name": "Fréquence"
+			},
+			"creneau": {
+				"name": "Créneau (1er / 2e / … jour du cycle)"
 			}
 		}
 	},

@@ -961,6 +961,7 @@ class Zone(SwitchEntity, RestoreEntity):
             frq = int(float(self.frequency))
 
         # --- Deterministic epoch-based scheduling ---
+        # Créneau select writes freq_start_date = ROTATION_EPOCH + (slot - 1).
         start_date_str = getattr(self._programdata, 'freq_start_date', None) or ""
         if start_date_str and frq > 1:
             try:

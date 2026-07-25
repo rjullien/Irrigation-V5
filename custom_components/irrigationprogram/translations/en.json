@@ -142,6 +142,9 @@
 		"select": {
 			"frequency": {
 				"name": "Frequency"
+			},
+			"creneau": {
+				"name": "Cycle slot (1st / 2nd / … day)"
 			}
 		}
 	},

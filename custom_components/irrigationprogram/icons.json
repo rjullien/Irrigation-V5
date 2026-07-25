@@ -84,6 +84,9 @@
 		"select":{
 			"frequency":{
 				"default":"mdi:repeat"
+			},
+			"creneau":{
+				"default":"mdi:calendar-start"
 			}
 		},
 		"sensor": {
