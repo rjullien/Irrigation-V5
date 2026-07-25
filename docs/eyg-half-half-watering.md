@@ -30,3 +30,7 @@ Désactiver / retirer les zones du programme unique actuel pour éviter le doubl
 
 Dans la config programme : **Date de début de cycle (AAAA-MM-JJ)**.  
 Laisser vide = comportement legacy (`last_ran`).
+
+## Suite — 3 programmes / freq semaine
+
+UX et migration dashboard : voir `Homeassistant_automation` → `eyguians/arrosage/SPEC-programmes-multi.md` (programmes A/B/C, fréquences 1/2/3/7, sélection de zones par programme).
