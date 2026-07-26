@@ -815,13 +815,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         for zone in sortedzones:
             all_zone_freq = True
-            if zone[ATTR_FREQUENCY] is False:
+            # Legacy / partial zone dicts (e.g. Prog C on ha61) may omit "freq"/"eco".
+            zone.setdefault(ATTR_FREQUENCY, False)
+            zone.setdefault("eco", False)
+            if zone.get(ATTR_FREQUENCY) is False:
                 # ensure program freq is enabled
                 newdata.update({ATTR_FREQUENCY: True})
                 all_zone_freq = False
 
             if newdata.get("repeat", False) is True:
-                zone.update({"eco":False})
+                zone.update({"eco": False})
 
         # if all zones have freq enabled, program do not enable program freq
         if all_zone_freq is True and newdata.get(ATTR_FREQUENCY, False) is True:
@@ -867,6 +870,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 newdata[ATTR_PARALLEL] = user_input[ATTR_PARALLEL]
                 newdata[ATTR_PUMP_DELAY] = user_input[ATTR_PUMP_DELAY]
                 newdata[ATTR_CARD_YAML] = user_input[ATTR_CARD_YAML]
+                newdata[ATTR_LOW_POWER] = user_input.get(ATTR_LOW_POWER, False)
                 newdata[ATTR_PAUSE_WATER_SOURCE] = user_input[ATTR_PAUSE_WATER_SOURCE]
                 newdata[ATTR_CONTINUE_ON_UNEXPECTED_STATE] = user_input.get(
                     ATTR_CONTINUE_ON_UNEXPECTED_STATE, False
