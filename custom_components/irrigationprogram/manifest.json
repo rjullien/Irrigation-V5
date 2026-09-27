@@ -3,7 +3,8 @@
   "name": "Irrigation controller",
   "after_dependencies": [
     "switch",
-    "sensor"
+    "sensor",
+    "lovelace"
   ],
   "codeowners": [
     "@petergridge"
