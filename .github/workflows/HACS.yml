@@ -15,3 +15,5 @@ jobs:
         uses: "hacs/action@main"
         with:
           category: "integration"
+          # Private-use fork: skip store-listing checks (Issues/topics not required)
+          ignore: "issues topics"
