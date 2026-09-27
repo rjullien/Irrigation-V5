@@ -1,5 +1,7 @@
 # Alignement upstream petergridge/Irrigation-V5
 
+> **Mise à jour :** pour l’état actuel du retard (fork `V2026.07.26.2` vs upstream `V2026.08.04`, ~39 ahead / 19 behind) et la décision de **ne pas syncer**, voir [`docs/upstream-lag.md`](upstream-lag.md). Le contenu ci-dessous reste un historique d’alignement antérieur.
+
 ## État
 
 Fork divergé à `V2026.06.01` (`bc74bb9`). Tip upstream : **`V2026.08.04`**.
