@@ -78,6 +78,9 @@
 			},
 			"default_run_time":{
 				"name":"Czas trwania"
+			},
+			"delay_time": {
+				"name": "Czas opóźnienia"
 			}
 		},
 		"number":{

@@ -78,6 +78,9 @@
       },
       "default_run_time": {
         "name": "Dĺžka trvania"
+      },
+      "delay_time": {
+      	"name": "Čas oneskorenia"
       }
     },
     "number": {

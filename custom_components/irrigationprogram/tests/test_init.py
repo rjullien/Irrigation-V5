@@ -305,6 +305,7 @@ def test_irrigation_program_initialization(mock_config_entry):
         frequency=None,
         freq_options=[],
         freq=False,
+        freq_start_date="",
         repeat=False,
         repeats=None,
         rain_behaviour=config.get(ATTR_RAIN_BEHAVIOUR, "stop"),
@@ -401,6 +402,7 @@ def test_irrigation_data_structure(mock_config_entry):
         frequency=None,
         freq_options=[],
         freq=False,
+        freq_start_date="",
         repeat=False,
         repeats=None,
         rain_behaviour="stop",
@@ -472,6 +474,10 @@ def test_exclude_function(mock_hass):
     mock_entry1.runtime_data.program.remaining_time.entity_id = "sensor.program1_remaining"
     mock_entry1.runtime_data.program.default_run_time = MagicMock()
     mock_entry1.runtime_data.program.default_run_time.entity_id = "sensor.program1_default"
+    mock_entry1.runtime_data.program.pause = MagicMock()
+    mock_entry1.runtime_data.program.pause.entity_id = "switch.program1_pause"
+    mock_entry1.runtime_data.program.delay_time = None
+    mock_entry1.runtime_data.program.rain_delay = None
     mock_entry1.runtime_data.program.inter_zone_delay = None
     mock_entry1.runtime_data.program.frequency = None
     mock_entry1.runtime_data.program.repeat = False
@@ -489,5 +495,6 @@ def test_exclude_function(mock_hass):
         "time.program1_start",
         "sensor.program1_remaining",
         "sensor.program1_default",
+        "switch.program1_pause",
     ]
     assert excluded == expected

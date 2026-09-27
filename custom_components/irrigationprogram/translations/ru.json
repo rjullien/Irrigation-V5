@@ -78,6 +78,9 @@
 			},
 			"default_run_time": {
 				"name": "Длительность"
+			},
+			"delay_time": {
+				"name": "Время задержки"
 			}
 		},
 		"number": {

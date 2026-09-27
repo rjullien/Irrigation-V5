@@ -63,6 +63,7 @@ def mock_config_entry():
             frequency=None,
             freq_options=[],
             freq=False,
+            freq_start_date="",
             repeat=False,
             repeats=None,
             rain_behaviour="stop",

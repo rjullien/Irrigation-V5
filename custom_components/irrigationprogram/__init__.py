@@ -177,6 +177,7 @@ class IrrigationProgram:
     continue_on_unexpected_state: bool = False
     input_mode: str = "slider"  # slider|box
     creneau: Any|SelectEntity = None  # rotation slot select (1er/2e/… jour du cycle)
+    delay_time: Any|SensorEntity = None  # rain-delay timestamp (upstream V2026.07.01+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -402,8 +403,13 @@ def exclude(hass: HomeAssistant):
                     p.start_time.entity_id,
                     p.remaining_time.entity_id,
                     p.default_run_time.entity_id,
+                    p.pause.entity_id,
                 ]
             )
+            if p.delay_time:
+                output.append(p.delay_time.entity_id)
+            if p.rain_delay:
+                output.append(p.rain_delay.entity_id)
             if p.inter_zone_delay:
                 output.append(p.inter_zone_delay.entity_id)
             if p.frequency:

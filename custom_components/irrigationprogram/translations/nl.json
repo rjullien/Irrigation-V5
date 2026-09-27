@@ -78,6 +78,9 @@
 			},
 			"default_run_time":{
 				"name":"Duur"
+			},
+			"delay_time": {
+				"name": "Vertragingstijd"
 			}
 		},
 		"number":{

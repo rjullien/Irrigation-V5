@@ -78,6 +78,9 @@
 			},
 			"default_run_time":{
 				"name":"Durata"
+			},
+			"delay_time": {
+				"name": "Tempo di ritardo"
 			}
 		},
 		"number":{

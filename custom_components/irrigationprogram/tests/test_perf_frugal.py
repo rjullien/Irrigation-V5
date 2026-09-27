@@ -121,6 +121,7 @@ def _bare_program(parallel, izd):
     p._program.inter_zone_delay.state = izd
     p._program_remaining = 0
     p._default_run_time = 0
+    p._resume_overrides = {}
     p.remaining_time_set = _async_noop
     p.default_run_time_set = _async_noop
     p.async_schedule_update_ha_state = MagicMock()
