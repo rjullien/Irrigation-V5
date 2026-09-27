@@ -1,0 +1,6 @@
+# Minimal deps to run custom_components/irrigationprogram/tests in CI / locally.
+# Matches the suite invoked with:
+#   PYTHONPATH=<repo-root> pytest custom_components/irrigationprogram/tests -o asyncio_mode=auto
+pytest>=8.0
+pytest-asyncio>=0.24
+homeassistant>=2025.1.0,<2026.0
