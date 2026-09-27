@@ -49,6 +49,8 @@ async def async_setup_entry(
         zone_entity = hass.states.get(zone.zone)
         if zone_entity:
             friendly_name = zone_entity.attributes.get("friendly_name")
+        else:
+            friendly_name = zone.zone
         z_name = zone.name
         if zone.rain_sensor or zone.adjustment:
             switch = IgnoreRainSensor(unique_id, name, z_name)

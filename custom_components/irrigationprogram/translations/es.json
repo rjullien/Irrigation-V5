@@ -78,6 +78,9 @@
 			},
 			"default_run_time":{
 				"name":"Duración"
+			},
+			"delay_time":{
+				"name":"Tiempo de retraso"
 			}
 		},
 		"number":{

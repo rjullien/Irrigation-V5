@@ -78,6 +78,9 @@
 			},
 			"default_run_time":{
 				"name":"Dauer"
+			},
+			"delay_time": {
+				"name": "Verzögerungszeit"
 			}
 		},
 		"number":{

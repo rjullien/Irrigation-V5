@@ -78,6 +78,9 @@
 			},
 			"default_run_time": {
 				"name": "Тривалість"
+			},
+			"delay_time": {
+				"name": "Час задержки"
 			}
 		},
 		"number": {

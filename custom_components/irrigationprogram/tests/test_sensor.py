@@ -31,6 +31,7 @@ from custom_components.irrigationprogram.const import (
     CONST_ZONE_DISABLED,
 )
 from custom_components.irrigationprogram.sensor import (
+    DelayTime,
     DefaultRunTime,
     RemainingTime,
     ZoneDefaultRunTime,
@@ -85,6 +86,7 @@ def mock_config_entry():
             frequency=None,
             freq_options=[],
             freq=False,
+            freq_start_date="",
             repeat=False,
             repeats=None,
             rain_behaviour="stop",
@@ -141,15 +143,17 @@ async def test_async_setup_entry_sensors(mock_hass, mock_config_entry):
 
     sensors = async_add_entities.call_args[0][0]
 
-    # RemainingTime, DefaultRunTime, ZoneStatus, ZoneNextRun, ZoneLastRan, ZoneRemainingTime, ZoneDefaultRunTime
-    assert len(sensors) == 7
+    # RemainingTime, DefaultRunTime, DelayTime, ZoneStatus, ZoneNextRun,
+    # ZoneLastRan, ZoneRemainingTime, ZoneDefaultRunTime
+    assert len(sensors) == 8
     assert isinstance(sensors[0], RemainingTime)
     assert isinstance(sensors[1], DefaultRunTime)
-    assert isinstance(sensors[2], ZoneStatus)
-    assert isinstance(sensors[3], ZoneNextRun)
-    assert isinstance(sensors[4], ZoneLastRan)
-    assert isinstance(sensors[5], ZoneRemainingTime)
-    assert isinstance(sensors[6], ZoneDefaultRunTime)
+    assert isinstance(sensors[2], DelayTime)
+    assert isinstance(sensors[3], ZoneStatus)
+    assert isinstance(sensors[4], ZoneNextRun)
+    assert isinstance(sensors[5], ZoneLastRan)
+    assert isinstance(sensors[6], ZoneRemainingTime)
+    assert isinstance(sensors[7], ZoneDefaultRunTime)
 
 
 def test_remaining_time_sensor():

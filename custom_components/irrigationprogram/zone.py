@@ -285,12 +285,6 @@ class Zone(SwitchEntity, RestoreEntity):
     @property
     def frequency(self) -> Any:
         """Frequency entity select."""
-        # manage the impact of the rain delay on frequency
-        delay = 0
-        if self._programdata.rain_delay:
-            if self._programdata.rain_delay.state == CONST_ON and self._programdata.rain_delay_days.state:
-                delay = int(self._programdata.rain_delay_days.state)
-
         if self._zonedata.frequency:
             frq = self._zonedata.frequency.current_option
             if frq == "unknown":
@@ -526,9 +520,13 @@ class Zone(SwitchEntity, RestoreEntity):
             CONST_UNAVAILABLE,
             CONST_UNKNOWN,
             CONST_ADJUSTED_OFF,
-            CONST_NO_WATER_SOURCE,
+            # CONST_NO_WATER_SOURCE handled below — allow run when pause-on-empty
             CONST_RAINING,
         ]:
+            return False
+
+        # If pause-when-well-empty is set, allow the zone to start (program pauses).
+        if cached == CONST_NO_WATER_SOURCE and not self._programdata.water_source_pause:
             return False
 
         # Zone is disabled and not started from the zone (from the program)
@@ -751,7 +749,7 @@ class Zone(SwitchEntity, RestoreEntity):
         elif self._programdata.pause.is_on:
             status = CONST_PAUSED
 
-        elif self.water_source == CONST_OFF:
+        elif self.water_source == CONST_OFF and not self._programdata.water_source_pause:
             status = CONST_NO_WATER_SOURCE
         elif (
             self.rain_sensor == CONST_ON
@@ -878,16 +876,35 @@ class Zone(SwitchEntity, RestoreEntity):
 
         delay = 0
         if self._programdata.rain_delay:
-            if self._programdata.rain_delay.state == CONST_ON and self._programdata.rain_delay_days.state:
+            # Delay next run from rain-delay activation timestamp + days
+            # (upstream V2026.08.01 — uses delay_time, not switch last_updated).
+            if (
+                self._programdata.rain_delay.state == CONST_ON
+                and self._programdata.rain_delay_days
+                and self._programdata.rain_delay_days.state
+            ):
                 delay = int(self._programdata.rain_delay_days.state)
+                delay_state = None
+                if self._programdata.delay_time is not None:
+                    delay_state = self._programdata.delay_time.state
+                if delay_state:
+                    delay_until = dt_util.parse_datetime(str(delay_state))
+                    if delay_until is not None:
+                        delay_until = delay_until + timedelta(days=delay)
+                        v_last_ran = first_start_time.replace(
+                            day=delay_until.day,
+                            month=delay_until.month,
+                            year=delay_until.year,
+                        )
 
         try:  # Frq is numeric
             v_next_run = self.get_numeric_frq(first_start_time,last_ran_midnight,today_midnight, v_last_ran)
         except ValueError: # Frq is not numeric, days of week or odd/even
             string_freq = self.clean_up_string(self.frequency)
-            v_last_ran = dt_util.as_local(dt_util.now()).replace(
-                hour=starthour, minute=startmin, second=00, microsecond=00
-            )
+            if delay == 0:
+                v_last_ran = dt_util.as_local(dt_util.now()).replace(
+                    hour=starthour, minute=startmin, second=00, microsecond=00
+                )
             day = v_last_ran.day
             if self.frequency == "Odd" :
                 v_next_run = self.get_next_odd_day(v_last_ran)
@@ -946,14 +963,26 @@ class Zone(SwitchEntity, RestoreEntity):
             (today - start_date).days % freq == 0
         This ensures multiple programs with different start_dates stay
         permanently offset without relying on last_ran drift.
+
+        Rain delay (upstream V2026.08.01): for legacy last_ran scheduling the
+        delay is applied by shifting ``last_ran`` in ``calc_next_run``. For
+        ``freq_start_date`` (fork) we still clamp with delay_until from
+        ``delay_time`` so Créneau rotation respects rain delay.
         """
 
-        delay = 0
-        delay_until = dt_util.as_local(dt_util.now())
+        delay_until = None
         if self._programdata.rain_delay:
-            if self._programdata.rain_delay.state == CONST_ON and self._programdata.rain_delay_days.state:
+            if (
+                self._programdata.rain_delay.state == CONST_ON
+                and self._programdata.rain_delay_days
+                and self._programdata.rain_delay_days.state
+                and self._programdata.delay_time is not None
+                and self._programdata.delay_time.state
+            ):
                 delay = int(self._programdata.rain_delay_days.state)
-                delay_until = dt_util.as_local(self._programdata.rain_delay.last_updated) + timedelta(days=delay)
+                parsed = dt_util.parse_datetime(str(self._programdata.delay_time.state))
+                if parsed is not None:
+                    delay_until = parsed + timedelta(days=delay)
 
         if self.frequency is None:
             frq = 1
@@ -983,7 +1012,9 @@ class Zone(SwitchEntity, RestoreEntity):
                         v_next_run = first_start_time
                     else:
                         v_next_run = first_start_time + timedelta(days=frq)
-                return max(v_next_run, delay_until)
+                if delay_until is not None:
+                    return max(v_next_run, delay_until)
+                return v_next_run
             except (ValueError, TypeError):
                 pass  # Fall through to legacy last_ran-based logic
 
@@ -1003,7 +1034,7 @@ class Zone(SwitchEntity, RestoreEntity):
         else:
             v_next_run = last_ran + timedelta(days=frq)
 
-        return max(v_next_run, delay_until)
+        return v_next_run
 
 
     def get_weekday(self, day):
@@ -1024,15 +1055,8 @@ class Zone(SwitchEntity, RestoreEntity):
 
     def get_next_even_day(self, start_date=None):
         """Next even numbered day."""
-
-        delay = 0
-        if self._programdata.rain_delay:
-            if self._programdata.rain_delay.state == CONST_ON and self._programdata.rain_delay_days.state:
-                delay = int(self._programdata.rain_delay_days.state)
         if start_date is None:
             start_date = dt_util.as_local(datetime.today())
-        if delay > 0:
-            start_date = dt_util.as_local(self._programdata.rain_delay.last_updated) + timedelta(days=delay)
 
         # today is odd and run time is in the future
         if start_date.day % 2 == 0 and start_date > dt_util.as_local(
@@ -1047,17 +1071,8 @@ class Zone(SwitchEntity, RestoreEntity):
 
     def get_next_odd_day(self, start_date=None):
         """Next odd numbered day."""
-        delay = 0
-        # update = None
-        if self._programdata.rain_delay:
-            if self._programdata.rain_delay.state == CONST_ON and self._programdata.rain_delay_days.state:
-                delay = int(self._programdata.rain_delay_days.state)
-
         if start_date is None:
             start_date = datetime.today()
-
-        if delay > 0:
-            start_date = dt_util.as_local(self._programdata.rain_delay.last_updated) + timedelta(days=delay)
 
         # today is odd and run time is in the future
         if start_date.day % 2 == 1 and start_date > dt_util.as_local(
@@ -1368,7 +1383,12 @@ class Zone(SwitchEntity, RestoreEntity):
     async def calc_default_run_time(self):
         """Update the run time component."""
 
-        if CONST_OFF in (self.enabled.state, self.water_source):
+        if CONST_OFF in (self.enabled.state,):
+            self._default_run_time = 0
+            await self.default_run_time_set()
+            return self._default_run_time
+
+        if CONST_OFF in (self.water_source,) and not self._programdata.water_source_pause:
             self._default_run_time = 0
             await self.default_run_time_set()
             return self._default_run_time
