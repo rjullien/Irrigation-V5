@@ -170,8 +170,11 @@ async def test_setup_creates_creneau_when_program_freq(mock_hass, mock_config_en
 
 
 async def test_creneau_select_updates_freq_start_date(mock_hass, mock_config_entry):
-    mock_config_entry.data = {"freq_start_date": ""}
-    mock_config_entry.options = {}
+    mock_config_entry.data = {
+        "freq_start_date": "",
+        "zones": [{"zone": "switch.zone1"}],
+    }
+    mock_config_entry.options = {"latency": 30}
     mock_config_entry.async_update_entry = MagicMock()
     # hass.config_entries.async_update_entry is what Creneau calls
     mock_hass.config_entries = MagicMock()
@@ -187,4 +190,11 @@ async def test_creneau_select_updates_freq_start_date(mock_hass, mock_config_ent
 
     assert creneau.current_option == "2"
     assert program.freq_start_date == creneau_to_start_date(2)
-    mock_hass.config_entries.async_update_entry.assert_called_once()
+    mock_hass.config_entries.async_update_entry.assert_called_once_with(
+        mock_config_entry,
+        options={
+            "freq_start_date": creneau_to_start_date(2),
+            "zones": [{"zone": "switch.zone1"}],
+            "latency": 30,
+        },
+    )

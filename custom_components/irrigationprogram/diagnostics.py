@@ -13,10 +13,7 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, config_entry: ConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    if config_entry.options != {}:
-        config = config_entry.options
-    else:
-        config = config_entry.data
+    config = {**config_entry.data, **config_entry.options}
 
     return {
         "irrigation_config": async_redact_data(config, ()),

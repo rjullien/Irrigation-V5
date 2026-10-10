@@ -770,10 +770,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._name = config_entry.data.get(CONF_NAME)
         self.zoneselect = {}
         self._uid = config_entry.entry_id
-        if config_entry.options == {}:
-            self._data = config_entry.data
-        else:
-            self._data = config_entry.options
+        self._data = {**config_entry.data, **config_entry.options}
 
         self._updated = False
         self._exclude = []

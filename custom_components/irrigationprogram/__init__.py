@@ -183,10 +183,7 @@ class IrrigationProgram:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up irrigation from a config entry."""
 
-    if entry.options != {}:
-        config = entry.options
-    else:
-        config = entry.data
+    config = {**entry.data, **entry.options}
 
     TIMEOUT_SECONDS = max(int(config.get(ATTR_START_LATENCY,60)), 60)
     REQUIRED_OBJECTS = []
@@ -245,7 +242,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             controller_type=config.get(ATTR_DEVICE_TYPE,"Generic"),
             inter_zone_delay=None,
             interlock=config.get(ATTR_INTERLOCK, "strict"),
-            zone_count=len(config.get(ATTR_ZONES,0)),
+            zone_count=len(config.get(ATTR_ZONES, [])),
             min_sec=config.get(ATTR_MIN_SEC, "minutes"),
             water_max=config.get(ATTR_WATER_MAX, 30),
             latency=int(config.get(ATTR_LATENCY, 5)),

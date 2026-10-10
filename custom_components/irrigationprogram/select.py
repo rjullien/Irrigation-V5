@@ -145,7 +145,7 @@ class Creneau(SelectEntity, RestoreEntity):
 
         # Persist without relying on reload for scheduling (runtime already updated)
         entry = self._config_entry
-        base: dict[str, Any] = dict(entry.options) if entry.options else dict(entry.data)
+        base: dict[str, Any] = {**entry.data, **entry.options}
         if base.get(ATTR_FREQ_START_DATE) != start:
             base[ATTR_FREQ_START_DATE] = start
             if entry.options:
