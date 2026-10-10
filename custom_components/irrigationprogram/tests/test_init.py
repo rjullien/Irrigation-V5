@@ -123,6 +123,41 @@ async def test_async_setup_entry_basic(mock_hass, mock_config_entry):
 
 
 @pytest.mark.asyncio
+async def test_async_setup_entry_merges_partial_options(mock_hass, mock_config_entry):
+    """Partial options override data without discarding configured zones."""
+    data = dict(mock_config_entry.options)
+    zones = []
+    for index in range(1, 7):
+        zone = dict(data[ATTR_ZONES][0])
+        zone[ATTR_ZONE] = f"switch.zone{index}"
+        zones.append(zone)
+    data[ATTR_ZONES] = zones
+    mock_config_entry.data = data
+    mock_config_entry.options = {ATTR_LATENCY: 30}
+
+    class _Store:
+        async def async_load(self):
+            return {}
+
+    with (
+        patch("homeassistant.components.persistent_notification.async_create"),
+        patch(
+            "custom_components.irrigationprogram.checkpoint_store",
+            lambda _hass: _Store(),
+        ),
+    ):
+        result = await async_setup_entry(mock_hass, mock_config_entry)
+
+    assert result is True
+    program = mock_config_entry.runtime_data.program
+    assert program.latency == 30
+    assert program.zone_count == 6
+    assert [zone.zone for zone in mock_config_entry.runtime_data.zone_data] == [
+        f"switch.zone{index}" for index in range(1, 7)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_async_setup_entry_unavailable_zones_no_typeerror(
     mock_hass, mock_config_entry
 ):

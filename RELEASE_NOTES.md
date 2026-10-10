@@ -1,5 +1,10 @@
 # Release Notes — Performance & Low Power Mode (branch `perf/frugal-lowpower`)
 
+## 2026.7.28
+
+- Merge partial config-entry options over stored data in setup, diagnostics, options flow, and créneau updates.
+- Default missing zone lists to an empty list during setup.
+
 **Base:** V2026.06.01 (`bc74bb9`) · **Target:** `petergridge/Irrigation-V5:main`  
 **Scope:** `custom_components/irrigationprogram/` · ~7 300 lines  
 **Audience:** constrained hosts (Raspberry Pi 3, SD-backed HA installs) and any user running multiple concurrent programs
