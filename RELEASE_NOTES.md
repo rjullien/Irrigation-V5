@@ -1,5 +1,11 @@
 # Release Notes — Performance & Low Power Mode (branch `perf/frugal-lowpower`)
 
+## 2026.8.4.1
+
+Renumbering only: code unchanged from `2026.7.28`. The base upstream tag
+`V2026.08.04` is an ancestor (`0` commits behind). This adopts the four-part
+fork version convention documented in `AGENTS.md`.
+
 ## 2026.7.28
 
 - Merge partial config-entry options over stored data in setup, diagnostics, options flow, and créneau updates.
