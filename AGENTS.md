@@ -11,6 +11,13 @@ The owner's HA (`ForkUpstreamMonitor`) uses GitHub compare `upstream-tag...main`
 3. Merge the PR with **Create a merge commit** (`gh pr merge --merge`) or a fast-forward push — **never squash or rebase-merge** (drops the upstream parent).
 4. Done only when `git rev-list --left-right --count <upstream-tag>...origin/main` prints `0 <ahead>`.
 
+## Versioning
+
+Fork manifest versions use `X.Y.Z.N`: `X.Y.Z` is the upstream base release
+without its `V` prefix or leading zeroes (`V2026.08.04` → `2026.8.4`), and
+`N` is the fork release counter. Reset `N` to `.1` for each upstream sync,
+after recording the upstream tag's ancestry.
+
 ## Tests
 
 `pip install -r requirements-test.txt`, then from the repo root: `PYTHONPATH=. pytest custom_components/irrigationprogram/tests -o asyncio_mode=auto` (CI: `.github/workflows/pytest.yml`).

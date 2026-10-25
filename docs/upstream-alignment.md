@@ -1,6 +1,8 @@
 # Alignement upstream petergridge/Irrigation-V5
 
-> **Mise à jour :** pour l’état actuel du retard (fork `V2026.07.26.2` vs upstream `V2026.08.04`, ~39 ahead / 19 behind) et la décision de **ne pas syncer**, voir [`docs/upstream-lag.md`](upstream-lag.md). Le contenu ci-dessous reste un historique d’alignement antérieur.
+> **Document historique.** L’inventaire actuel des différences avec
+> `V2026.08.04` est [`upstream-lag.md`](upstream-lag.md). La politique de
+> synchronisation et la convention de version sont dans [`AGENTS.md`](../AGENTS.md).
 
 ## État
 
@@ -43,7 +45,8 @@ Document mémo retard (ne pas merger) : PR #16 / [`docs/upstream-lag.md`](upstre
 
 - Dépendance `lovelace` (cassante HA 2026.x)
 - Refactor massif `sensor.py` vers `_attr_native_value` (non requis pour les fixes August ; éviter de casser le throttle low-power)
-- Numérotation / tags upstream (`V2026.08.0x`) — on garde `2026.7.xx` fork (`2026.7.27` = align August)
+- ~~Numérotation / tags upstream (`V2026.08.0x`) — on garde `2026.7.xx` fork (`2026.7.27` = align August).~~
+  **Superseded:** the fork now uses the four-part `X.Y.Z.N` convention in `AGENTS.md`.
 - Contenu exclusif upstream sans équivalent local utile
 
 ## Residual behind / ahead
