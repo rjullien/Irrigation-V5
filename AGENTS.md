@@ -21,3 +21,8 @@ after recording the upstream tag's ancestry.
 ## Tests
 
 `pip install -r requirements-test.txt`, then from the repo root: `PYTHONPATH=. pytest custom_components/irrigationprogram/tests -o asyncio_mode=auto` (CI: `.github/workflows/pytest.yml`).
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
