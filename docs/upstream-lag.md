@@ -27,6 +27,16 @@ The fork keeps deliberate local behavior; port upstream changes deliberately and
   Version fork : `2026.11.2.1`. Les tableaux ci-dessous restent l'inventaire
   historique August des différences locales, conservées par ce port.
 
+## Contributions upstream
+
+| PR | Sujet | Branche fork | État (2026-11-07) |
+|---|---|---|---|
+| [#333](https://github.com/petergridge/Irrigation-V5/pull/333) | Revérification de l’état après l’avertissement de latence, fermeture envoyée même sans ouverture confirmée (issue #330, inspiré de `a030f35`) | `fix-latency-recheck` | Ouvert, mergeable, pas encore de revue |
+| [#299](https://github.com/petergridge/Irrigation-V5/pull/299) | `freq_start_date` | `feat/freq-start-date` | Fermé par nous, jamais revu |
+
+Si #333 est fusionné, le prochain port ne doit pas dupliquer la logique : garder
+`a030f35` (fenêtre de stabilisation) et réconcilier avec la version upstream.
+
 ## État de référence
 
 Inventaire vérifié le **2026-10-25** sur `origin/main`. Le tag upstream
@@ -52,8 +62,8 @@ manuellement. Procédure complète : [`AGENTS.md`](../AGENTS.md).
 | Mode frugal et baisse de charge CPU/recorder | `program.py`, `sensor.py`, `zone.py`, `config_flow.py`, `const.py` | `d557100`, `5c7156f` | Limite les écritures d’entités de compte à rebours sans fausser le temps interne; option basse consommation. | `test_perf_frugal.py` | La recherche ciblée GitHub « low power » n’a retourné aucun PR; cela ne prouve pas l’absence d’une proposition sous un autre titre. |
 | Reprise du cycle après redémarrage HA | `runtime_checkpoint.py`, `program.py`, `zone.py`, `__init__.py`, `const.py` | `3431062`, `660a91e`, `b3cc34f`, `c71249c` | Persiste le checkpoint, reprend le temps restant et restaure la file/interlock sans couper les vannes encore nécessaires. | `test_runtime_checkpoint.py` | La recherche ciblée « resume after reboot » n’a retourné aucun PR; état non conclu au-delà de cette recherche. |
 | Rafraîchissement du statut zone depuis la vanne | `zone.py`, `program.py`, `const.py` | `b55beb1`, `43d333f` | Si le cache est absent ou inconnu, relit l’état live du solénoïde plutôt que de laisser un statut zone périmé. | `test_zone_status_cache.py` | La recherche ciblée « zone status cache » n’a retourné aucun PR; état non conclu au-delà de cette recherche. |
-| Fermeture après ouverture Tuya non confirmée | `zone.py` | `a030f35` | Après un `open` non confirmé, émet une fermeture et attend une fenêtre de stabilisation pour prévenir les ouvertures retardées en cascade. | `test_solenoid_close_on_lag.py` | La recherche ciblée « close on lag » n’a retourné aucun PR; état non conclu au-delà de cette recherche. |
-| Décalage déterministe des cycles fréquents | `config_flow.py`, `const.py`, `__init__.py`, `zone.py`, `strings.json` | `602e02c` | `freq_start_date` permet d’ancrer le cycle de fréquence sur une date choisie. | `test_freq_start_date.py`, `test_rain_delay_august.py` | Le PR upstream [#299](https://github.com/petergridge/Irrigation-V5/pull/299) est **fermé sans merge** (`merged_at: null`). |
+| Fermeture après ouverture Tuya non confirmée | `zone.py` | `a030f35` | Après un `open` non confirmé, émet une fermeture et attend une fenêtre de stabilisation pour prévenir les ouvertures retardées en cascade. | `test_solenoid_close_on_lag.py` | Proposé upstream (adapté au code upstream, avec revérification après latence) : [#333](https://github.com/petergridge/Irrigation-V5/pull/333), ouvert le 2026-11-07, lié à l’issue #330. |
+| Décalage déterministe des cycles fréquents | `config_flow.py`, `const.py`, `__init__.py`, `zone.py`, `strings.json` | `602e02c` | `freq_start_date` permet d’ancrer le cycle de fréquence sur une date choisie. | `test_freq_start_date.py`, `test_rain_delay_august.py` | Le PR upstream [#299](https://github.com/petergridge/Irrigation-V5/pull/299) a été **fermé par nous** cinq minutes après son ouverture, sans revue upstream (`merged_at: null`). |
 | Sélecteur de créneau de rotation | `rotation.py`, `select.py`, `const.py`, `icons.json`, `strings.json` | `d148dc0` | Le select « Créneau » choisit le jour du cycle pour alterner les programmes. | `test_rotation.py`, `test_select.py` | La recherche ciblée « rotation » n’a retourné aucun PR; état non conclu au-delà de cette recherche. |
 | Tolérance aux options de zone partielles et persistance low-power | `config_flow.py` | `5c7156f` | Accepte des dictionnaires de zone historiques sans `freq`/`eco` et conserve `low_power` dans les options. | `test_perf_frugal.py` couvre le comportement low-power; aucun test dédié du repli `freq`/`eco` n’a été identifié. | Aucun statut PR dédié vérifié. |
 | Fusion des options partielles avec les données stockées | `__init__.py`, `config_flow.py`, `diagnostics.py`, `select.py` | `9396b48` | Les options HA deviennent un overlay sur `entry.data`, au lieu de remplacer toute la configuration même si elles ne sont que partielles. | `test_init.py` (`test_async_setup_entry_merges_partial_options`), `test_select.py` | La recherche ciblée « partial options » n’a retourné aucun PR; état non conclu au-delà de cette recherche. |
