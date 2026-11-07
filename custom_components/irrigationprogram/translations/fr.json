@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Obtenir l'état actuel",
+			"description": "Renvoie l'état actuel des programmes et des zones d'irrigation sous forme de dictionnaire compatible JSON."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -242,6 +248,7 @@
 					"card_yaml": "Activer la création de carte d'entité YAML",
 					"low_power_mode": "Mode basse consommation (réduit la charge CPU/recorder – Raspberry Pi / carte SD)",
 					"zone_delay_max": "Délai max inter zone",
+					"eco_max": "Temps d'attente maximal pour le mode ECO",
 					"rain_delay_on": "Différer le prochain lancement si pluie",
 					"latency": "Délai pour les équipements peu réactifs",
 					"start_latency": "Délai pour les équipements démarrant lentement",
@@ -288,6 +295,7 @@
 					"card_yaml": "Activer la création de carte d'entité YAML",
 					"low_power_mode": "Mode basse consommation (réduit la charge CPU/recorder – Raspberry Pi / carte SD)",
 					"zone_delay_max": "Délai max inter zone",
+					"eco_max": "Temps d'attente maximal pour le mode ECO",
 					"rain_delay_on": "Différer le prochain lancement si pluie",
 					"latency": "Délai pour les équipements peu réactifs",
 					"start_latency": "Délai pour les équipements démarrant lentement",

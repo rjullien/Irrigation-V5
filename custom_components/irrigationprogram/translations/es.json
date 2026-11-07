@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Obtener estado actual",
+			"description": "Devuelve el estado actual de los programas y zonas de riego como un diccionario compatible con JSON."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -237,6 +243,7 @@
 					"pump_delay": "Apply lead or lag time for pump starting",
 					"card_yaml": "Habilitar la creción de tarjeta de entidades en yaml",
 					"zone_delay_max": "Maximum zone transition delay",
+					"eco_max": "Tiempo máximo de espera para el modo ECO",
 					"rain_delay_on": "Delay the next run when rain detected",
 					"latency": "Wait time for slow responding (high latency) devices",
 					"start_latency": "Wait time for devices that load slowly on startup",
@@ -282,6 +289,7 @@
 					"pump_delay": "Apply lead or lag time for pump starting",
 					"card_yaml": "Habilitar la creción de tarjeta de entidades en yaml",
 					"zone_delay_max": "Maximum zone transition delay",
+					"eco_max": "Tiempo máximo de espera para el modo ECO",
 					"rain_delay_on": "Delay the next run when rain detected",
 					"latency": "Wait time for slow responding (high latency) devices",
 					"start_latency": "Wait time for devices that load slowly on startup",

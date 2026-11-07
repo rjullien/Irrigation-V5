@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Ottieni stato attuale",
+			"description": "Restituisce lo stato attuale dei programmi e delle zone di irrigazione come dizionario compatibile con JSON."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -237,6 +243,7 @@
 					"pump_delay": "Applica un tempo di anticipo o ritardo per l'avvio della pompa",
 					"card_yaml": "Abilita la creazione di codice yaml per una entities card",
 					"zone_delay_max": "Ritardo massimo di transizione tra zone",
+					"eco_max": "Tempo massimo di attesa per la modalità ECO",
 					"rain_delay_on": "Abilita il posticipo manuale del prossimo avvio quando viene rilevata pioggia",
 					"latency": "Tempo di attesa per dispositivi a risposta lenta (alta latenza)",
 					"start_latency": "Tempo di attesa per i dispositivi che si caricano lentamente all'avvio",
@@ -282,6 +289,7 @@
 					"pump_delay": "Applica un tempo di anticipo o ritardo per l'avvio della pompa",
 					"card_yaml": "Abilita la creazione di codice yaml per una entities card",
 					"zone_delay_max": "Ritardo massimo di transizione tra zone",
+					"eco_max": "Tempo massimo di attesa per la modalità ECO",
 					"rain_delay_on": "Abilita il posticipo manuale del prossimo avvio quando viene rilevata pioggia",
 					"latency": "Tempo di attesa per dispositivi a risposta lenta (alta latenza)",
 					"start_latency": "Tempo di attesa per i dispositivi che si caricano lentamente all'avvio",

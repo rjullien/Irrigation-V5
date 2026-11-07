@@ -1,8 +1,31 @@
 # Inventaire actuel des différences fork / upstream
 
-**English summary:** Fork version `2026.8.4.1` is based on upstream `V2026.08.04`.
-`git rev-list --left-right --count V2026.08.04...origin/main` returned `0 46` on 2026-10-25.
+**English summary:** Fork version `2026.11.2.1` is based on upstream `V2026.11.02`.
+November changes were ported manually, preserving all deliberate fork behavior.
 The fork keeps deliberate local behavior; port upstream changes deliberately and record ancestry (see `AGENTS.md`).
+
+## Port November — V2026.11.02
+
+- V2026.11.01 (`316e425`, `dfa9512`) : option avancée `eco_max`,
+  événement `Program_running_on_restarted`, service response-only
+  `irrigationprogram.get_current_state` et traductions pour les langues du fork.
+- Gardes locales : absence de dernier état sans événement ni crash, zones sans
+  `_programdata` ignorées, comparaison des noms de programmes avec `==`.
+- V2026.11.02 (`8237254`) : retrait de `CONNECTION_CLASS`. Le réordonnancement
+  de la dataclass n'est pas nécessaire avec les annotations différées du fork.
+- `EnableRainDelay` est aligné avec V2026.11.02 : restauration du dernier état
+  au démarrage (absence d'état → `off`), sans reset forcé. `last_updated` prend
+  l'heure du démarrage comme upstream; les calculs du prochain cycle utilisent
+  le timestamp d'activation `delay_time`, restauré séparément, et non `last_updated`.
+  Régressions : `test_switch.py` et `test_rain_delay_august.py`.
+- **Piège de la copie racine :** le zip de release upstream est construit depuis
+  la copie du composant à la racine du dépôt. Le manifest dans
+  `custom_components/irrigationprogram` indique encore `V2026.11.01`.
+  Ne pas importer ces fichiers racine dans le fork; seules les modifications
+  utiles ont été répliquées dans `custom_components/irrigationprogram`.
+- Ascendance enregistrée par `git merge -s ours V2026.11.02` après le port manuel.
+  Version fork : `2026.11.2.1`. Les tableaux ci-dessous restent l'inventaire
+  historique August des différences locales, conservées par ce port.
 
 ## État de référence
 
@@ -36,7 +59,6 @@ manuellement. Procédure complète : [`AGENTS.md`](../AGENTS.md).
 | Fusion des options partielles avec les données stockées | `__init__.py`, `config_flow.py`, `diagnostics.py`, `select.py` | `9396b48` | Les options HA deviennent un overlay sur `entry.data`, au lieu de remplacer toute la configuration même si elles ne sont que partielles. | `test_init.py` (`test_async_setup_entry_merges_partial_options`), `test_select.py` | La recherche ciblée « partial options » n’a retourné aucun PR; état non conclu au-delà de cette recherche. |
 | Recalcul du prochain cycle après rain delay | `program.py`, `zone.py` | `4cfa3b8` | Utilise l’heure effective de délai et ne décale pas le cycle depuis le `last_updated` du switch de rain delay. | `test_rain_delay_august.py` | Les PRs upstream #305, #307, #309, #311, #313 et #315 sont fermées et fusionnées; le statut de cette adaptation n’est pas établi par ces PRs. |
 | Setup d’une zone offline et pause au démarrage | `config_flow.py`, `zone.py` | `4cfa3b8` | Garde les zones configurées même si leur entité est momentanément absente, avec l’ID comme nom de repli. | `test_pause_on_start_august.py` | Les PRs upstream #305, #307, #309, #311, #313 et #315 sont fermées et fusionnées; le statut de cette adaptation n’est pas établi par ces PRs. |
-| Reset du switch rain-delay au démarrage | `switch.py` | `4cfa3b8` | `EnableRainDelay` démarre systématiquement sur `off` au lieu de restaurer son dernier état. | `test_switch.py` couvre l’entité et son état par défaut; aucun test dédié du reset au démarrage n’a été identifié. | Aucun statut PR dédié vérifié. |
 | Dépendance Lovelace facultative | `manifest.json` | `b57f8e6`, `43fee35` | Retire `lovelace` de `dependencies` et le place dans `after_dependencies` pour ne pas imposer cette intégration au démarrage. | Aucun test dédié identifié. | Le tag `V2026.08.04` garde `lovelace` dans `dependencies`; le fork le rend facultatif. |
 
 ### Vérifications de changements évoqués dans l’historique

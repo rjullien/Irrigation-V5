@@ -9,6 +9,8 @@ import pytest
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.core import State
+from homeassistant.util import dt as dt_util
 
 from custom_components.irrigationprogram import (
     IrrigationData,
@@ -199,6 +201,25 @@ def test_enable_zone_switch():
     assert switch._attr_attribution == "Irrigation Controller: Test Program, zone1"
     assert switch._attr_translation_key == "enable_zone"
     assert switch._attr_has_entity_name is True
+
+
+@pytest.mark.parametrize("restored_state", ["on", "off", None])
+async def test_enable_rain_delay_restores_state(restored_state):
+    switch = EnableRainDelay("test_id", "Test Program")
+    now = dt_util.utcnow()
+    last_state = (
+        State("switch.rain_delay", restored_state)
+        if restored_state is not None else None
+    )
+    with (
+        patch.object(switch, "async_get_last_state", AsyncMock(return_value=last_state)),
+        patch.object(switch, "async_schedule_update_ha_state") as schedule,
+        patch("custom_components.irrigationprogram.switch.dt_util.utcnow", return_value=now),
+    ):
+        await switch.async_added_to_hass()
+    assert switch.is_on is (restored_state == "on")
+    assert switch.last_updated == now
+    schedule.assert_called_once_with()
 
 
 def test_zone_config_switch():

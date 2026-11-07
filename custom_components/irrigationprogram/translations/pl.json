@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Pobierz aktualny stan",
+			"description": "Zwraca aktualny stan programów i stref nawadniania jako słownik kompatybilny z JSON."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -237,6 +243,7 @@
 					"pump_delay": "Zastosuj wyprzedzenie lub opóźnienie startu pompy",
 					"card_yaml": "Generuj yaml karty Encje",
 					"zone_delay_max": "Maksymalna pauza między strefami",
+					"eco_max": "Maksymalny czas oczekiwania dla trybu ECO",
 					"rain_delay_on": "Czas opóźnienia po wykryciu deszczu",
 					"latency": "Czas oczekiwania dla wolno odpowiadających urządzeń",
 					"start_latency": "Czas oczekiwania dla wolnych urządzeń na starcie",
@@ -282,6 +289,7 @@
 					"pump_delay": "Zastosuj wyprzedzenie lub opóźnienie startu pompy",
 					"card_yaml": "Generuj yaml karty Encje",
 					"zone_delay_max": "Maksymalna pauza między strefami",
+					"eco_max": "Maksymalny czas oczekiwania dla trybu ECO",
 					"rain_delay_on": "Czas opóźnienia po wykryciu deszczu",
 					"latency": "Czas oczekiwania dla wolno odpowiadających urządzeń",
 					"start_latency": "Czas oczekiwania dla wolnych urządzeń na starcie",

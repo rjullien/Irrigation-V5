@@ -1,5 +1,16 @@
 # Release Notes — Performance & Low Power Mode (branch `perf/frugal-lowpower`)
 
+## 2026.11.2.1
+
+- Manually port upstream V2026.11.01 and V2026.11.02: configurable ECO wait maximum,
+  restart notification event and response-only `irrigationprogram.get_current_state` service.
+- Guard missing restored state and uninitialized zones; compare program names by value.
+- Restore the rain-delay switch state on HA startup, aligned with upstream;
+  next-run calculations keep using the separately restored `delay_time` timestamp.
+- Remove deprecated config-flow `CONNECTION_CLASS`; retain all fork behavior,
+  including checkpoint resume, low-power mode, rotation and partial options merging.
+- Record V2026.11.02 ancestry without importing upstream's duplicate root component.
+
 ## 2026.8.4.1
 
 Renumbering only: code unchanged from `2026.7.28`. The base upstream tag

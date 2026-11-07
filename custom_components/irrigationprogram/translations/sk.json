@@ -47,6 +47,12 @@
       }
     }
   },
+  "services": {
+    "get_current_state": {
+      "name": "Získať aktuálny stav",
+      "description": "Vracia aktuálny stav programov a zón zavlažovania ako slovník kompatibilný s JSON."
+    }
+  },
   "entity": {
     "sensor": {
       "zone_status": {
@@ -237,6 +243,7 @@
           "pump_delay": "Oneskorenie štartu čerpadla",
           "card_yaml": "Povoliť vytvorenie YAML karty",
           "zone_delay_max": "Maximálne oneskorenie medzi zónami",
+          "eco_max": "Maximálna doba čakania pre režim ECO",
           "rain_delay_on": "Povoliť manuálne oneskorenie po daždi",
           "latency": "Čas čakania pre pomalé zariadenia",
           "start_latency": "Čas čakania pri štarte",
@@ -282,6 +289,7 @@
           "pump_delay": "Oneskorenie štartu čerpadla",
           "card_yaml": "Povoliť vytvorenie YAML karty",
           "zone_delay_max": "Maximálne oneskorenie medzi zónami",
+          "eco_max": "Maximálna doba čakania pre režim ECO",
           "rain_delay_on": "Povoliť manuálne oneskorenie po daždi",
           "latency": "Čas čakania pre pomalé zariadenia",
           "start_latency": "Čas čakania pri štarte",

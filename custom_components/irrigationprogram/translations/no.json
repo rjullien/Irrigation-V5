@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Hent gjeldende status",
+			"description": "Returnerer den nåværende statusen for irrigasjonsprogrammer og soner som et JSON-kompatibelt dictionary."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -237,6 +243,7 @@
 					"pump_delay": "Bruk for- eller etterslepstid ved oppstart av pumpe",
 					"card_yaml": "Aktiver opprettelse av YAML for enhetskort",
 					"zone_delay_max": "Maksimal overgangsforsinkelse mellom soner",
+					"eco_max": "Maksimal ventetid for ECO-modus",
 					"rain_delay_on": "Utsett neste kjøring ved oppdaget regn",
 					"latency": "Ventetid for tregt reagerende (høy latens) enheter",
 					"start_latency": "Oppstartsforsinkelse for tregt reagerende enheter",
@@ -282,6 +289,7 @@
 					"pump_delay": "Bruk for- eller etterslepstid ved oppstart av pumpe",
 					"card_yaml": "Aktiver opprettelse av YAML for enhetskort",
 					"zone_delay_max": "Maksimal overgangsforsinkelse mellom soner",
+					"eco_max": "Maksimal ventetid for ECO-modus",
 					"rain_delay_on": "Utsett neste kjøring ved oppdaget regn",
 					"latency": "Ventetid for tregt reagerende (høy latens) enheter",
 					"start_latency": "Oppstartsforsinkelse for tregt reagerende enheter",
