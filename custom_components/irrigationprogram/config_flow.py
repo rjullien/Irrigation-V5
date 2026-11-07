@@ -26,6 +26,7 @@ from .const import (
     ATTR_CONTINUE_ON_UNEXPECTED_STATE,
     ATTR_LOW_POWER,
     ATTR_DEVICE_TYPE,
+    ATTR_ECO_MAX,
     ATTR_FLOW_SENSOR,
     ATTR_FREQUENCY,
     ATTR_FREQUENCY_OPTIONS,
@@ -77,7 +78,6 @@ _LOGGER = logging.getLogger(__name__)
 class IrrigationFlowHandler(config_entries.ConfigFlow):
     """FLow handler."""
 
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
     VERSION = 9
 
     def __init__(self) -> None:
@@ -574,6 +574,7 @@ class IrrigationFlowHandler(config_entries.ConfigFlow):
                 self._data[ATTR_WATER_MAX] = user_input[ATTR_WATER_MAX]
                 self._data[ATTR_WATER_STEP] = user_input[ATTR_WATER_STEP]
                 self._data[ATTR_ZONE_DELAY_MAX] = user_input[ATTR_ZONE_DELAY_MAX]
+                self._data[ATTR_ECO_MAX] = user_input.get(ATTR_ECO_MAX, 10)
                 self._data[ATTR_LATENCY] = user_input[ATTR_LATENCY]
                 self._data[ATTR_START_LATENCY] = user_input[ATTR_START_LATENCY]
                 self._data[ATTR_PARALLEL] = user_input[ATTR_PARALLEL]
@@ -658,6 +659,10 @@ class IrrigationFlowHandler(config_entries.ConfigFlow):
                     description={
                         "suggested_value": default_input.get(ATTR_ZONE_DELAY_MAX, 120)
                     },
+                ): sel.NumberSelector({"min": 1, "max": 9999, "mode": "box"}),
+                vol.Optional(
+                    ATTR_ECO_MAX,
+                    description={"suggested_value": default_input.get(ATTR_ECO_MAX, 10)},
                 ): sel.NumberSelector({"min": 1, "max": 9999, "mode": "box"}),
                 vol.Optional(
                     ATTR_LATENCY,
@@ -866,6 +871,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 newdata[ATTR_WATER_MAX] = user_input[ATTR_WATER_MAX]
                 newdata[ATTR_WATER_STEP] = user_input[ATTR_WATER_STEP]
                 newdata[ATTR_ZONE_DELAY_MAX] = user_input[ATTR_ZONE_DELAY_MAX]
+                newdata[ATTR_ECO_MAX] = user_input.get(ATTR_ECO_MAX, 10)
                 newdata[ATTR_LATENCY] = user_input[ATTR_LATENCY]
                 newdata[ATTR_START_LATENCY] = user_input[ATTR_START_LATENCY]
                 newdata[ATTR_PARALLEL] = user_input[ATTR_PARALLEL]
@@ -960,6 +966,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     description={
                         "suggested_value": default_input.get(ATTR_ZONE_DELAY_MAX, 120)
                     },
+                ): sel.NumberSelector({"min": 1, "max": 9999, "mode": "box"}),
+                vol.Optional(
+                    ATTR_ECO_MAX,
+                    description={"suggested_value": default_input.get(ATTR_ECO_MAX, 10)},
                 ): sel.NumberSelector({"min": 1, "max": 9999, "mode": "box"}),
                 vol.Optional(
                     ATTR_LATENCY,

@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Obter estado atual",
+			"description": "Retorna o estado atual dos programas e zonas de irrigação como um dicionário compatível com JSON."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -237,6 +243,7 @@
 					"pump_delay": "Apply lead or lag time for pump starting",
 					"card_yaml": "Permitir a criação de cartão de entidades em yaml",
 					"zone_delay_max": "Atraso máximo de transição de zona",
+					"eco_max": "Tempo máximo de espera para o modo ECO",
 					"rain_delay_on": "Adiar o próximo arranque quando for detetada chuva",
 					"latency": "Tempo de espera para dispositivos de resposta lenta (alta latência)",
 					"start_latency": "Tempo de espera para dispositivos que carregam lentamente no arranque",
@@ -282,6 +289,7 @@
 					"pump_delay": "Apply lead or lag time for pump starting",
 					"card_yaml": "Permitir a criação de cartão de entidades em yaml",
 					"zone_delay_max": "Atraso máximo de transição de zona",
+					"eco_max": "Tempo máximo de espera para o modo ECO",
 					"rain_delay_on": "Adiar o próximo arranque quando for detetada chuva",
 					"latency": "Tempo de espera para dispositivos de resposta lenta (alta latência)",
 					"start_latency": "Tempo de espera para dispositivos que carregam lentamente no arranque",

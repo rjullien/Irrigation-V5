@@ -165,3 +165,13 @@ async def test_number_entities_attributes():
     assert delay._attr_translation_key == "inter_zone_delay"
     assert delay.native_min_value == 0
     assert delay.native_max_value == 120
+
+
+async def test_setup_wait_uses_program_eco_max(mock_hass, mock_config_entry):
+    mock_config_entry.runtime_data.program.eco_max = 250
+    mock_config_entry.runtime_data.program.min_sec = "seconds"
+    mock_config_entry.runtime_data.program.input_mode = "box"
+    await async_setup_entry(mock_hass, mock_config_entry, MagicMock())
+    wait = mock_config_entry.runtime_data.zone_data[0].wait
+    assert wait.native_max_value == 250
+    assert wait.mode == "box"

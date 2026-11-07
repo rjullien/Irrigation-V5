@@ -27,7 +27,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
 from . import utils
@@ -38,6 +38,7 @@ from .const import (
     ATTR_LOW_POWER,
     ATTR_CONTINUE_ON_UNEXPECTED_STATE,
     ATTR_DEVICE_TYPE,
+    ATTR_ECO_MAX,
     ATTR_FLOW_SENSOR,
     ATTR_FREQUENCY,
     ATTR_FREQUENCY_OPTIONS,
@@ -68,7 +69,7 @@ from .const import (
     CONST_ECO,
     DOMAIN,
 )
-from .globals import QUEUEDPROGRAMS
+from .globals import QUEUEDPROGRAMS, update_current_state
 from .runtime_checkpoint import apply_downtime, checkpoint_store
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
@@ -171,6 +172,7 @@ class IrrigationProgram:
     pump_delay: int
     card_yaml: bool
     low_power: bool = False
+    eco_max: int = 10
     latency: int=5
     start_latency: int = 60
     water_source_pause: bool = False
@@ -245,6 +247,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             zone_count=len(config.get(ATTR_ZONES, [])),
             min_sec=config.get(ATTR_MIN_SEC, "minutes"),
             water_max=config.get(ATTR_WATER_MAX, 30),
+            eco_max=config.get(ATTR_ECO_MAX, 10),
             latency=int(config.get(ATTR_LATENCY, 5)),
             start_latency=max(int(config.get(ATTR_START_LATENCY,60)), 60),
             water_step=config.get("water_step", 1),
@@ -480,10 +483,22 @@ async def async_queue_program(hass: HomeAssistant, program):
         await program.pause_switch.async_turn_on()
 
 
+async def async_get_current_state_service(call: ServiceCall) -> dict[str, dict[str, object]]:
+    """Return the current irrigation state as a JSON-compatible dict."""
+    return update_current_state()
+
+
 async def async_setup(hass: HomeAssistant, config):
     """Irrigation object."""
 
     hass.data.setdefault(DOMAIN, {})
+    if not hass.services.has_service(DOMAIN, "get_current_state"):
+        hass.services.async_register(
+            DOMAIN,
+            "get_current_state",
+            async_get_current_state_service,
+            supports_response=SupportsResponse.ONLY,
+        )
     #    if not config.get("card_yaml", False):
     # 1. Serve lovelace card
     path = Path(__file__).parent / "www"

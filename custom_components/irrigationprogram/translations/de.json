@@ -47,6 +47,12 @@
 			}
 		}
 	},
+	"services": {
+		"get_current_state": {
+			"name": "Aktuellen Status abrufen",
+			"description": "Gibt den aktuellen Status der Bewässerungsprogramme und Zonen als JSON-kompatibles Dictionary zurück."
+		}
+	},
 	"entity": {
 		"sensor": {
 			"zone_status": {
@@ -237,6 +243,7 @@
 					"pump_delay": "Apply lead or lag time for pump starting",
 					"card_yaml": "Entities Card YAML generieren",
 					"zone_delay_max": "Maximale Zonenübergangsverzögerung",
+					"eco_max": "Maximale Wartezeit für den ECO-Modus",
 					"rain_delay_on": "Verzögerung des nächsten Laufs bei Regen",
 					"latency": "Wartezeit für langsam reagierende (hohe Latenz) Geräte",
 					"start_latency": "Wartezeit für Geräte, die beim Start langsam laden",
@@ -282,6 +289,7 @@
 					"pump_delay": "Apply lead or lag time for pump starting",
 					"card_yaml": "Entities Card YAML generieren",
 					"zone_delay_max": "Maximale Zonenübergangsverzögerung",
+					"eco_max": "Maximale Wartezeit für den ECO-Modus",
 					"rain_delay_on": "Verzögerung des nächsten Laufs bei Regen",
 					"latency": "Wartezeit für langsam reagierende (hohe Latenz) Geräte",
 					"start_latency": "Wartezeit für Geräte, die beim Start langsam laden",

@@ -44,7 +44,7 @@ from .const import (
     DOMAIN,
     TIME_STR_FORMAT,
 )
-from .globals import PROGRAMS, QUEUEDPROGRAMS
+from .globals import PROGRAMS, QUEUEDPROGRAMS, update_current_state
 from .pump import PumpClass
 from .runtime_checkpoint import (
     apply_downtime,
@@ -909,6 +909,13 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
     async def async_added_to_hass(self):
         """Add listener."""
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state == CONST_ON:
+            self.hass.bus.async_fire(
+                "irrigation_event",
+                {"action": "Program_running_on_restarted", "program": self.entity_id},
+            )
+
         self._unsub_point_in_time = async_track_point_in_utc_time(
             self._hass, self.point_in_time_listener, self.get_next_interval()
         )
@@ -1376,6 +1383,8 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
         if not self._program.pause.is_on:
             self._paused = False
 
+        update_current_state()
+
         if self._state is False:
             await self._program.pause.async_turn_off()
         elif self._state:
@@ -1539,6 +1548,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
 
         self._state = True
         self._finished = False
+        update_current_state()
         self.async_schedule_update_ha_state()
 
         # stop all running programs except the calling program
@@ -1603,6 +1613,7 @@ class IrrigationProgram(SwitchEntity, RestoreEntity):
                 await asyncio.sleep(0)
         self._state = False
         self._finished = True
+        update_current_state()
         self.async_schedule_update_ha_state()
 
         # check the queue remove this program
