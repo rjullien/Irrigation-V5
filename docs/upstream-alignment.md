@@ -1,10 +1,17 @@
 # Alignement upstream petergridge/Irrigation-V5
 
 > **Document historique.** L’inventaire actuel des différences avec
-> `V2026.08.04` est [`upstream-lag.md`](upstream-lag.md). La politique de
+> `V2026.11.02` est [`upstream-lag.md`](upstream-lag.md). La politique de
 > synchronisation et la convention de version sont dans [`AGENTS.md`](../AGENTS.md).
 
 ## État
+
+Base actuelle : **V2026.11.02**, manifest fork **2026.11.2.1**.
+Ports manuels November : `eco_max`, événement de redémarrage avec garde
+`last_state is None`, service de statut avec comparaison des noms par valeur
+et exclusion des zones non initialisées, retrait de `CONNECTION_CLASS`.
+L'ascendance du tag est enregistrée via une fusion `-s ours`.
+Les paragraphes August ci-dessous restent un historique du port précédent.
 
 Fork divergé à `V2026.06.01` (`bc74bb9`). Tip upstream : **`V2026.08.04`**.
 

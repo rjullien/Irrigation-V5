@@ -1,8 +1,26 @@
 # Inventaire actuel des différences fork / upstream
 
-**English summary:** Fork version `2026.8.4.1` is based on upstream `V2026.08.04`.
-`git rev-list --left-right --count V2026.08.04...origin/main` returned `0 46` on 2026-10-25.
+**English summary:** Fork version `2026.11.2.1` is based on upstream `V2026.11.02`.
+November changes were ported manually, preserving all deliberate fork behavior.
 The fork keeps deliberate local behavior; port upstream changes deliberately and record ancestry (see `AGENTS.md`).
+
+## Port November — V2026.11.02
+
+- V2026.11.01 (`316e425`, `dfa9512`) : option avancée `eco_max`,
+  événement `Program_running_on_restarted`, service response-only
+  `irrigationprogram.get_current_state` et traductions pour les langues du fork.
+- Gardes locales : absence de dernier état sans événement ni crash, zones sans
+  `_programdata` ignorées, comparaison des noms de programmes avec `==`.
+- V2026.11.02 (`8237254`) : retrait de `CONNECTION_CLASS`. Le réordonnancement
+  de la dataclass n'est pas nécessaire avec les annotations différées du fork.
+- **Piège de la copie racine :** le zip de release upstream est construit depuis
+  la copie du composant à la racine du dépôt. Le manifest dans
+  `custom_components/irrigationprogram` indique encore `V2026.11.01`.
+  Ne pas importer ces fichiers racine dans le fork; seules les modifications
+  utiles ont été répliquées dans `custom_components/irrigationprogram`.
+- Ascendance enregistrée par `git merge -s ours V2026.11.02` après le port manuel.
+  Version fork : `2026.11.2.1`. Les tableaux ci-dessous restent l'inventaire
+  historique August des différences locales, conservées par ce port.
 
 ## État de référence
 
