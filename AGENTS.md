@@ -18,6 +18,27 @@ without its `V` prefix or leading zeroes (`V2026.08.04` → `2026.8.4`), and
 `N` is the fork release counter. Reset `N` to `.1` for each upstream sync,
 after recording the upstream tag's ancestry.
 
+## Releases
+
+One GitHub release per fork manifest version, created after the version bump is merged to `main`, only on the owner's go. The owner's deploy tooling installs the **latest release** (HACS too, via `hacs.json` `zip_release`).
+
+1. Tag `V<manifest version>` (e.g. `V2026.11.2.1`) on `origin/main`.
+2. Build the `irrigationprogram.zip` asset: contents of `custom_components/irrigationprogram/` at the zip root, without `tests/` and `__pycache__/`.
+3. Notes: the version's section of `RELEASE_NOTES.md`, plus the upstream base tag.
+4. Publish as latest:
+
+```bash
+git fetch origin
+rm -rf /tmp/rel && mkdir -p /tmp/rel
+git archive origin/main custom_components/irrigationprogram | tar -x -C /tmp/rel
+(cd /tmp/rel/custom_components/irrigationprogram && rm -rf tests && zip -qr /tmp/irrigationprogram.zip .)
+gh release create V<version> /tmp/irrigationprogram.zip --repo rjullien/Irrigation-V5 \
+  --target "$(git rev-parse origin/main)" --title "V<version> — <summary>" \
+  --notes-file <notes.md> --latest
+```
+
+5. Check that the deploy tooling now resolves the new tag and that its dry-run diff only lists the release's files. Deploying and restarting HA are separate go's.
+
 ## Tests
 
 `pip install -r requirements-test.txt`, then from the repo root: `PYTHONPATH=. pytest custom_components/irrigationprogram/tests -o asyncio_mode=auto` (CI: `.github/workflows/pytest.yml`).
